@@ -4,6 +4,24 @@ A marketplace of camera-verified skills. An expert photographs a repair and talk
 
 Built for the Meta Global AI Developer Hackathon, Oct 27 to Nov 4, 2026. Track: Indie Developer. Problem statement: Build for Your World.
 
+## Submission
+
+| | |
+|---|---|
+| Hackathon | Meta Global AI Developer Hackathon, Oct 27 – Nov 4, 2026 |
+| Track · problem statement | Indie Developer · Build for Your World (skilled trades and home repair) |
+| Team | Deniz Yunus Gogus ([@DenizYunus](https://github.com/DenizYunus)), solo |
+| Demo video (3 min) | TODO: link after upload (storyboard and recording plan in `demo/`) |
+| Code | this repository; APK on the [Releases](https://github.com/DenizYunus/athena/releases) page |
+| Meta models | `muse-spark-1.3`, `sam-3.1`, `muse-voice-transcribe-1.0`, `muse-image-1.0` (table below) |
+| New work | everything here was written during the event; the commit history starts Oct 27, 2026 |
+
+**What it does, in three sentences.** An expert photographs a job in order and says what they did; one Muse Spark call compiles that into a skill with ordered steps, the visual state that proves each step, safety gates, reference photos and a voice vocabulary. A learner installs the skill and is guided from the live camera: questions are a short clip plus voice, answered in a spoken sentence; each step is proven with a photo that the verifier compares against the expert's reference and answers with a strict JSON verdict, pass, fail with the fix, or unclear with the exact photo to take next. SAM 3.1 outlines the part on the learner's own photo, and a safety gate never opens without evidence.
+
+**Why this is a system and not an image analyzer.** The organizers' list of discouraged projects includes "simple image analyzers". Athena's unit of work is a verification loop, not a description: the verifier must commit to one of three outcomes with a confidence and a photo request; the app refuses a hesitant pass on a safety gate; a fail carries the concrete correction and a SAM mask on the offending part; the compiler turns an expert's photos and speech into the checkable spec that the loop runs against; and the conversation turn carries video and transcript together so the guide answers about what it sees.
+
+**Honest notes for judges.** The Model API has no realtime video session, so verification is by photo and short clip, not a live video call. The two seed skills were written by us, and their reference photos were generated with `muse-image-1.0` (the compiler flow uses the author's real photos). The guide and the verifier use structured output; there is no function calling. Device testing: TODO after the phone run (the APK was built and every request shape was verified live against the API before any phone test).
+
 ## What we built during the hackathon
 
 Everything in this repository was created during the event. Commit history starts Oct 27, 2026.
@@ -118,6 +136,7 @@ Findings from the first live day, for anyone pointing these models at a repair: 
 
 ```
 RESEARCH.md        hackathon rules, Meta API facts, build plan
+demo/              storyboard, recording plan, submission form text
 design/            UI artboards (open design/canvas.json with the Design canvas, or read the .dc.html files)
 backend/
   app/             FastAPI app, guide agent, verifier, SAM highlight, ASR relay, compiler, schemas
