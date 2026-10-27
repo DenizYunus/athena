@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mode C: push to talk over live feed</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;font-family:Inter,system-ui,sans-serif;background:#0F1115;color:#F3F4F6}
+a{color:#F5B82E}a:hover{color:#FFD166}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #22262E; color: #F3F4F6; font-family: Inter, system-ui, sans-serif; position: relative; overflow: hidden">
+
+  <svg width="390" height="844" viewBox="0 0 390 844" role="img" aria-label="Live camera feed: compressor with the start relay and overload protector" style="display: block; position: absolute; inset: 0">
+    <rect width="390" height="844" fill="#22262E"/>
+    <rect x="0" y="560" width="390" height="284" fill="#1C1F26"/>
+    <circle cx="120" cy="430" r="120" fill="#2B303A" stroke="#C9CED8" stroke-width="2"/>
+    <rect x="236" y="366" width="104" height="84" rx="9" fill="#2B303A" stroke="#C9CED8" stroke-width="2"/>
+    <rect x="350" y="384" width="44" height="46" rx="6" fill="#2B303A" stroke="#C9CED8" stroke-width="2"/>
+    <path d="M228 408h8M340 408h10M100 310v-60h150" fill="none" stroke="#C9CED8" stroke-width="2"/>
+    <circle cx="262" cy="394" r="6" fill="#F5B82E"/><circle cx="290" cy="394" r="6" fill="#F5B82E"/><circle cx="276" cy="426" r="6" fill="#F5B82E"/>
+    <path d="M236 384v48" stroke="#F5B82E" stroke-width="4"/>
+    <rect x="30" y="150" width="130" height="80" rx="8" fill="none" stroke="#5B616C" stroke-width="2" stroke-dasharray="6 5"/>
+  </svg>
+
+  <div style="position: absolute; top: 54px; left: 16px; right: 16px; display: flex; align-items: center; justify-content: space-between">
+    <a href="SkillDetail.dc.html" aria-label="Exit session" style="width: 44px; height: 44px; border-radius: 22px; background: rgba(15,17,21,0.75); color: #F3F4F6; display: flex; align-items: center; justify-content: center; text-decoration: none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></a>
+    <span style="height: 32px; padding: 0 12px; border-radius: 16px; background: rgba(15,17,21,0.75); color: #F3F4F6; font-size: 13px; font-weight: 600; display: flex; align-items: center">Step 4 of 7</span>
+    <sc-if value="{{ isRecording }}" hint-placeholder-val="{{ false }}">
+      <span style="height: 32px; padding: 0 10px; border-radius: 16px; background: rgba(15,17,21,0.85); color: #FF6B57; font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 6px"><span style="width: 8px; height: 8px; border-radius: 4px; background: #FF6B57"></span>REC 0:04 · video + voice</span>
+    </sc-if>
+    <sc-if value="{{ notRecording }}" hint-placeholder-val="{{ true }}">
+      <span style="height: 32px; padding: 0 10px; border-radius: 16px; background: rgba(15,17,21,0.75); color: #A3A9B5; font-size: 12px; font-weight: 500; display: flex; align-items: center; gap: 6px"><span style="width: 8px; height: 8px; border-radius: 4px; background: #2DD4BF"></span>Live</span>
+    </sc-if>
+  </div>
+  <div style="position: absolute; top: 98px; left: 16px; right: 16px; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px">
+    <span style="height: 4px; border-radius: 2px; background: #2DD4BF"></span><span style="height: 4px; border-radius: 2px; background: #2DD4BF"></span><span style="height: 4px; border-radius: 2px; background: #2DD4BF"></span><span style="height: 4px; border-radius: 2px; background: #F5B82E"></span><span style="height: 4px; border-radius: 2px; background: rgba(243,244,246,0.35)"></span><span style="height: 4px; border-radius: 2px; background: rgba(243,244,246,0.35)"></span><span style="height: 4px; border-radius: 2px; background: rgba(243,244,246,0.35)"></span>
+  </div>
+  <sc-if value="{{ isRecording }}" hint-placeholder-val="{{ false }}">
+    <div style="position: absolute; inset: 0; border: 4px solid #FF6B57; box-sizing: border-box; pointer-events: none"></div>
+  </sc-if>
+
+  <div style="position: absolute; left: 0; right: 0; bottom: 150px; height: 330px; padding: 0 16px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: flex-end; gap: 8px; overflow: hidden; -webkit-mask-image: linear-gradient(to top, rgba(0,0,0,1) 0%, rgba(0,0,0,1) 45%, rgba(0,0,0,0) 100%); mask-image: linear-gradient(to top, rgba(0,0,0,1) 0%, rgba(0,0,0,1) 45%, rgba(0,0,0,0) 100%)">
+    <div style="align-self: flex-start; max-width: 300px; padding: 9px 13px; border-radius: 16px 16px 16px 4px; background: rgba(26,29,35,0.92); font-size: 14px; line-height: 1.4; color: #C9CED8">Pull the relay straight off the pins. Grip the body, not the wires.</div>
+    <div style="align-self: flex-end; max-width: 280px; padding: 9px 13px; border-radius: 16px 16px 4px 16px; background: rgba(42,47,56,0.95); font-size: 14px; line-height: 1.4; color: #F3F4F6">"Which one is the relay, the black box or the small one?"</div>
+    <div style="align-self: flex-start; max-width: 300px; padding: 9px 13px; border-radius: 16px 16px 16px 4px; background: rgba(26,29,35,0.92); font-size: 14px; line-height: 1.4; color: #C9CED8">The bigger black box with three pins under it. The small one next to it is the overload protector, leave that alone.</div>
+
+    <sc-if value="{{ isRecording }}" hint-placeholder-val="{{ false }}">
+      <div style="align-self: flex-end; max-width: 290px; padding: 9px 13px; border-radius: 16px 16px 4px 16px; background: rgba(42,47,56,0.95); border: 1px solid #FF6B57; font-size: 14px; line-height: 1.4; color: #F3F4F6; display: flex; align-items: center; gap: 8px"><span style="display: flex; gap: 3px; align-items: flex-end; height: 16px; flex-shrink: 0" aria-hidden="true"><span style="width: 3px; height: 8px; background: #FF6B57; border-radius: 2px"></span><span style="width: 3px; height: 16px; background: #FF6B57; border-radius: 2px"></span><span style="width: 3px; height: 11px; background: #FF6B57; border-radius: 2px"></span><span style="width: 3px; height: 14px; background: #FF6B57; border-radius: 2px"></span><span style="width: 3px; height: 6px; background: #FF6B57; border-radius: 2px"></span></span>"Okay it came off but one pin looks…"</div>
+    </sc-if>
+    <sc-if value="{{ isThinking }}" hint-placeholder-val="{{ false }}">
+      <div style="align-self: flex-end; max-width: 290px; padding: 9px 13px; border-radius: 16px 16px 4px 16px; background: rgba(42,47,56,0.95); font-size: 14px; line-height: 1.4; color: #F3F4F6; display: flex; flex-direction: column; gap: 6px"><span>"Okay it came off but one pin looks bent, is that bad?"</span><span style="font-size: 11px; color: #A3A9B5; display: flex; align-items: center; gap: 5px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg>5 s clip attached</span></div>
+      <div style="align-self: flex-start; padding: 9px 13px; border-radius: 16px 16px 16px 4px; background: rgba(26,29,35,0.92); font-size: 14px; color: #A3A9B5; display: flex; align-items: center; gap: 8px"><span style="width: 16px; height: 16px; border-radius: 8px; border: 2px solid #2A2F38; border-top-color: #F5B82E; box-sizing: border-box" aria-hidden="true"></span>Watching your clip…</div>
+    </sc-if>
+    <sc-if value="{{ showAnswer }}" hint-placeholder-val="{{ false }}">
+      <div style="align-self: flex-end; max-width: 290px; padding: 9px 13px; border-radius: 16px 16px 4px 16px; background: rgba(42,47,56,0.95); font-size: 14px; line-height: 1.4; color: #F3F4F6; display: flex; flex-direction: column; gap: 6px"><span>"Okay it came off but one pin looks bent, is that bad?"</span><span style="font-size: 11px; color: #A3A9B5; display: flex; align-items: center; gap: 5px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg>5 s clip attached</span></div>
+      <div style="align-self: flex-start; max-width: 310px; padding: 9px 13px; border-radius: 16px 16px 16px 4px; background: rgba(26,29,35,0.95); border: 1px solid rgba(45,212,191,0.7); font-size: 14px; line-height: 1.4; color: #F3F4F6; display: flex; flex-direction: column; gap: 6px">
+        <span>Slightly bent is fine. I saw it wobble in your clip, so straighten the left pin gently with needle-nose pliers until it lines up with the other two.</span>
+        <sc-if value="{{ isAnswering }}" hint-placeholder-val="{{ false }}">
+          <span style="font-size: 11px; font-weight: 700; color: #2DD4BF; letter-spacing: 0.5px; display: flex; align-items: center; gap: 6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>SPEAKING</span>
+        </sc-if>
+      </div>
+    </sc-if>
+  </div>
+
+  <div style="position: absolute; left: 0; right: 0; bottom: 0; height: 150px; padding: 0 20px 26px 20px; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 10px">
+    <span style="font-size: 13px; font-weight: 500; color: #F3F4F6; text-shadow: 0 1px 3px rgba(0,0,0,0.8)">{{ hint }}</span>
+    <div style="width: 100%; display: flex; align-items: center; justify-content: space-between">
+      <a href="StepPass.dc.html" style="width: 56px; height: 56px; border-radius: 28px; background: rgba(26,29,35,0.85); border: 1px solid #2A2F38; color: #F3F4F6; font-size: 11px; font-weight: 600; display: flex; align-items: center; justify-content: center; text-decoration: none">Steps</a>
+
+      <sc-if value="{{ isIdle }}" hint-placeholder-val="{{ true }}">
+        <button onClick="{{ onTap }}" aria-label="Tap to record a question with video" style="width: 84px; height: 84px; border-radius: 42px; background: #F5B82E; border: 5px solid rgba(58,51,32,0.9); box-sizing: border-box; display: flex; align-items: center; justify-content: center; color: #141413"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg></button>
+      </sc-if>
+      <sc-if value="{{ isRecording }}" hint-placeholder-val="{{ false }}">
+        <button onClick="{{ onTap }}" aria-label="Tap to stop and send" style="width: 84px; height: 84px; border-radius: 42px; background: #FF6B57; border: 5px solid rgba(255,107,87,0.35); box-sizing: border-box; display: flex; align-items: center; justify-content: center; color: #0F1115"><svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="3"/></svg></button>
+      </sc-if>
+      <sc-if value="{{ isBusy }}" hint-placeholder-val="{{ false }}">
+        <button disabled aria-label="{{ busyLabel }}" style="width: 84px; height: 84px; border-radius: 42px; background: rgba(26,29,35,0.9); border: 5px solid #2A2F38; box-sizing: border-box; display: flex; align-items: center; justify-content: center"><span style="width: 30px; height: 30px; border-radius: 15px; border: 3px solid #2A2F38; border-top-color: #F5B82E; box-sizing: border-box" aria-hidden="true"></span></button>
+      </sc-if>
+
+      <a href="ModeSnapshot.dc.html" aria-label="Check this step now" style="width: 56px; height: 56px; border-radius: 28px; background: rgba(26,29,35,0.85); border: 1px solid #2A2F38; color: #2DD4BF; display: flex; align-items: center; justify-content: center; text-decoration: none"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 13 4 4L19 7"/></svg></a>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"thinkMs":{"editor":"int","default":1600,"min":300,"max":5000,"unit":"ms"},"speakMs":{"editor":"int","default":3500,"min":500,"max":10000,"unit":"ms"},"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { phase: 'idle', answered: false };
+    this.onTap = this.onTap.bind(this);
+  }
+  onTap() {
+    const phase = this.state.phase;
+    if (phase === 'idle') { this.setState({ phase: 'recording' }); return; }
+    if (phase === 'recording') {
+      this.setState({ phase: 'thinking' });
+      const think = this.props.thinkMs ?? 1600;
+      const speak = this.props.speakMs ?? 3500;
+      setTimeout(() => {
+        this.setState({ phase: 'answering', answered: true });
+        setTimeout(() => this.setState({ phase: 'idle' }), speak);
+      }, think);
+    }
+  }
+  renderVals() {
+    const p = this.state.phase;
+    const hints = {
+      idle: this.state.answered ? 'Tap to ask something else' : 'Tap to record video and your question',
+      recording: 'Recording video + voice · tap to send',
+      thinking: 'Clip and transcript sent to the guide',
+      answering: 'Reply on screen and spoken aloud'
+    };
+    return {
+      isIdle: p === 'idle',
+      isRecording: p === 'recording',
+      notRecording: p !== 'recording',
+      isThinking: p === 'thinking',
+      isAnswering: p === 'answering',
+      isBusy: p === 'thinking' || p === 'answering',
+      showAnswer: p === 'answering' || (p === 'idle' && this.state.answered),
+      busyLabel: p === 'thinking' ? 'Thinking' : 'Speaking',
+      hint: hints[p],
+      onTap: this.onTap
+    };
+  }
+}
+</script>
+</body>
+</html>

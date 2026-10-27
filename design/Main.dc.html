@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Athena marketplace</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;font-family:Inter,system-ui,sans-serif;background:#0F1115;color:#F3F4F6}
+a{color:#F5B82E}a:hover{color:#FFD166}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #0F1115; color: #F3F4F6; font-family: Inter, system-ui, sans-serif; display: flex; flex-direction: column; overflow: hidden; position: relative">
+
+  <div style="padding: 62px 20px 0 20px; display: flex; flex-direction: column; gap: 18px">
+    <div style="display: flex; align-items: center; justify-content: space-between">
+      <div style="display: flex; align-items: center; gap: 10px">
+        <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><path d="M14 3 L25 24 H3 Z" fill="none" stroke="#F5B82E" stroke-width="2.4" stroke-linejoin="round"/><circle cx="14" cy="17" r="3" fill="#F5B82E"/></svg>
+        <span style="font-size: 20px; font-weight: 700; letter-spacing: -0.3px">Athena</span>
+      </div>
+      <button aria-label="Notifications" style="width: 44px; height: 44px; border-radius: 22px; border: 1px solid #2A2F38; background: #1A1D23; display: flex; align-items: center; justify-content: center; color: #F3F4F6">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+      </button>
+    </div>
+    <h1 style="margin: 0; font-size: 30px; line-height: 1.1; font-weight: 700; letter-spacing: -0.6px">What needs fixing?</h1>
+    <label style="display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 16px; border-radius: 14px; background: #1A1D23; border: 1px solid #2A2F38; color: #A3A9B5; font-size: 16px">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <span style="flex: 1">Fridge not cooling, brakes squeal…</span>
+      <input type="search" aria-label="Search skills" style="position: absolute; opacity: 0; width: 1px; height: 1px">
+    </label>
+    <div style="display: flex; gap: 8px; overflow: hidden">
+      <span style="height: 36px; padding: 0 14px; border-radius: 18px; background: #F5B82E; color: #141413; font-size: 14px; font-weight: 600; display: flex; align-items: center; white-space: nowrap">Appliances</span>
+      <span style="height: 36px; padding: 0 14px; border-radius: 18px; background: #1A1D23; border: 1px solid #2A2F38; color: #F3F4F6; font-size: 14px; font-weight: 500; display: flex; align-items: center; white-space: nowrap">Bikes</span>
+      <span style="height: 36px; padding: 0 14px; border-radius: 18px; background: #1A1D23; border: 1px solid #2A2F38; color: #F3F4F6; font-size: 14px; font-weight: 500; display: flex; align-items: center; white-space: nowrap">Home network</span>
+      <span style="height: 36px; padding: 0 14px; border-radius: 18px; background: #1A1D23; border: 1px solid #2A2F38; color: #F3F4F6; font-size: 14px; font-weight: 500; display: flex; align-items: center; white-space: nowrap">Plumbing</span>
+    </div>
+  </div>
+
+  <div style="padding: 22px 20px 0 20px; display: flex; flex-direction: column; gap: 14px; flex: 1">
+    <div style="display: flex; align-items: baseline; justify-content: space-between">
+      <h2 style="margin: 0; font-size: 17px; font-weight: 600">Verified skills near you</h2>
+      <a href="SkillDetail.dc.html" style="font-size: 14px; font-weight: 500; text-decoration: none">See all</a>
+    </div>
+
+    <a href="SkillDetail.dc.html" style="text-decoration: none; color: inherit; display: block; border-radius: 18px; background: #1A1D23; border: 1px solid #2A2F38; overflow: hidden">
+      <div style="height: 150px; background: #22262E; position: relative; display: flex; align-items: center; justify-content: center">
+        <svg width="220" height="120" viewBox="0 0 220 120" role="img" aria-label="Illustration of a refrigerator compressor and start relay"><circle cx="70" cy="70" r="40" fill="#2B303A" stroke="#C9CED8" stroke-width="2"/><rect x="118" y="44" width="52" height="40" rx="5" fill="#2B303A" stroke="#C9CED8" stroke-width="2"/><rect x="176" y="52" width="26" height="24" rx="4" fill="#2B303A" stroke="#C9CED8" stroke-width="2"/><path d="M110 64h8M170 64h6M60 30V16h40" fill="none" stroke="#C9CED8" stroke-width="2"/><circle cx="130" cy="58" r="3" fill="#F5B82E"/><circle cx="142" cy="58" r="3" fill="#F5B82E"/><circle cx="136" cy="72" r="3" fill="#F5B82E"/></svg>
+        <span style="position: absolute; top: 12px; left: 12px; height: 26px; padding: 0 10px; border-radius: 13px; background: rgba(15,17,21,0.85); color: #2DD4BF; font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 13 4 4L19 7"/></svg>97% verified completions</span>
+      </div>
+      <div style="padding: 14px 16px 16px 16px; display: flex; flex-direction: column; gap: 8px">
+        <div style="font-size: 17px; font-weight: 600; line-height: 1.25">Replace a refrigerator start relay</div>
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #A3A9B5">
+          <span style="width: 22px; height: 22px; border-radius: 11px; background: #F5B82E; color: #141413; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center">M</span>
+          <span>Marco R. · Appliance tech, 14 yrs</span>
+        </div>
+        <div style="display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: #A3A9B5">
+          <span>7 steps · 25 min · Difficulty 2/5</span>
+          <span style="font-size: 15px; font-weight: 700; color: #F3F4F6">$6</span>
+        </div>
+      </div>
+    </a>
+
+    <div style="display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 14px; background: #1A1D23; border: 1px solid #2A2F38">
+        <div style="width: 56px; height: 56px; border-radius: 10px; background: #22262E; display: flex; align-items: center; justify-content: center"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#C9CED8" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="17" r="3.5"/><circle cx="18" cy="17" r="3.5"/><path d="M6 17 10 8h5l3 9M10 8H7"/></svg></div>
+        <div style="flex: 1; display: flex; flex-direction: column; gap: 3px">
+          <div style="font-size: 15px; font-weight: 600">Bleed hydraulic bike brakes</div>
+          <div style="font-size: 13px; color: #A3A9B5">Lena K. · 9 steps · 40 min · $8</div>
+        </div>
+        <span style="font-size: 12px; font-weight: 600; color: #2DD4BF">94%</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 14px; background: #1A1D23; border: 1px solid #2A2F38">
+        <div style="width: 56px; height: 56px; border-radius: 10px; background: #22262E; display: flex; align-items: center; justify-content: center"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#C9CED8" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 10h10v8a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3Z"/><path d="M14 12h3a2 2 0 0 1 0 4h-3M6 10V7h6v3"/></svg></div>
+        <div style="flex: 1; display: flex; flex-direction: column; gap: 3px">
+          <div style="font-size: 15px; font-weight: 600">Descale an espresso machine</div>
+          <div style="font-size: 13px; color: #A3A9B5">Tomas B. · 5 steps · 30 min · Free</div>
+        </div>
+        <span style="font-size: 12px; font-weight: 600; color: #2DD4BF">99%</span>
+      </div>
+    </div>
+  </div>
+
+  <nav aria-label="Main" style="height: 84px; padding: 8px 12px 18px 12px; box-sizing: border-box; border-top: 1px solid #2A2F38; background: #0F1115; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr))">
+    <a href="Main.dc.html" style="text-decoration: none; display: flex; flex-direction: column; align-items: center; gap: 4px; color: #F5B82E; font-size: 11px; font-weight: 600; min-height: 44px; justify-content: center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m15 9-2 6-4 2 2-6z"/></svg>Explore</a>
+    <a href="SkillDetail.dc.html" style="text-decoration: none; display: flex; flex-direction: column; align-items: center; gap: 4px; color: #A3A9B5; font-size: 11px; font-weight: 500; min-height: 44px; justify-content: center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>My skills</a>
+    <a href="AuthorCapture.dc.html" style="text-decoration: none; display: flex; flex-direction: column; align-items: center; gap: 4px; color: #A3A9B5; font-size: 11px; font-weight: 500; min-height: 44px; justify-content: center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>Create</a>
+    <a href="SessionComplete.dc.html" style="text-decoration: none; display: flex; flex-direction: column; align-items: center; gap: 4px; color: #A3A9B5; font-size: 11px; font-weight: 500; min-height: 44px; justify-content: center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>Profile</a>
+  </nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Safety gate</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;font-family:Inter,system-ui,sans-serif;background:#0F1115;color:#F3F4F6}
+a{color:#F5B82E}a:hover{color:#FFD166}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #0F1115; color: #F3F4F6; font-family: Inter, system-ui, sans-serif; display: flex; flex-direction: column; overflow: hidden; position: relative">
+
+  <div style="height: 470px; background: #22262E; position: relative; overflow: hidden">
+    <svg width="390" height="470" viewBox="0 0 390 470" role="img" aria-label="Live camera: wall outlet with the fridge plug pulled out" style="display: block">
+      <rect x="0" y="0" width="390" height="470" fill="#22262E"/>
+      <rect x="0" y="300" width="390" height="170" fill="#1C1F26"/>
+      <rect x="150" y="120" width="90" height="130" rx="10" fill="#2B303A" stroke="#C9CED8" stroke-width="2"/>
+      <rect x="178" y="150" width="8" height="22" rx="2" fill="#C9CED8"/><rect x="204" y="150" width="8" height="22" rx="2" fill="#C9CED8"/><circle cx="195" cy="196" r="6" fill="#C9CED8"/>
+      <path d="M70 330c40-30 90-40 120-30" fill="none" stroke="#C9CED8" stroke-width="5" stroke-linecap="round"/>
+      <rect x="186" y="280" width="44" height="34" rx="6" fill="#2B303A" stroke="#C9CED8" stroke-width="2"/>
+      <rect x="196" y="258" width="7" height="22" rx="2" fill="#C9CED8"/><rect x="216" y="258" width="7" height="22" rx="2" fill="#C9CED8"/>
+    </svg>
+    <div style="position: absolute; top: 54px; left: 16px; right: 16px; display: flex; align-items: center; justify-content: space-between">
+      <a href="SkillDetail.dc.html" aria-label="Exit session" style="width: 44px; height: 44px; border-radius: 22px; background: rgba(15,17,21,0.8); color: #F3F4F6; display: flex; align-items: center; justify-content: center; text-decoration: none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></a>
+      <span style="height: 32px; padding: 0 12px; border-radius: 16px; background: rgba(15,17,21,0.85); color: #F5B82E; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6Z"/></svg>Safety gate · before step 1</span>
+      <span style="height: 32px; padding: 0 10px; border-radius: 16px; background: rgba(15,17,21,0.85); color: #F3F4F6; font-size: 12px; font-weight: 500; display: flex; align-items: center; gap: 6px"><span style="width: 8px; height: 8px; border-radius: 4px; background: #FF6B57"></span>Live</span>
+    </div>
+    <div style="position: absolute; left: 50%; top: 150px; width: 220px; height: 220px; margin-left: -110px; border: 2px dashed rgba(245,184,46,0.8); border-radius: 18px"></div>
+    <span style="position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); height: 28px; padding: 0 12px; border-radius: 14px; background: rgba(15,17,21,0.85); color: #A3A9B5; font-size: 12px; white-space: nowrap; display: flex; align-items: center">Keep plug and outlet both in the frame</span>
+  </div>
+
+  <div style="flex: 1; padding: 18px 20px 0 20px; display: flex; flex-direction: column; gap: 12px">
+    <div style="display: flex; gap: 12px; align-items: flex-start">
+      <div style="width: 40px; height: 40px; border-radius: 20px; background: #3A3320; display: flex; align-items: center; justify-content: center; flex-shrink: 0"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#F5B82E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6Z"/><path d="M12 9v4M12 16h.01"/></svg></div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <h1 style="margin: 0; font-size: 20px; font-weight: 700; line-height: 1.2; letter-spacing: -0.3px">Show me the fridge is unplugged</h1>
+        <p style="margin: 0; font-size: 15px; line-height: 1.4; color: #C9CED8">Point the camera so I can see the cord out of the outlet. I won't start step 1 until I can confirm it.</p>
+      </div>
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 12px; background: #1A1D23; border: 1px solid #2A2F38; font-size: 13px; color: #A3A9B5">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2DD4BF" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg>
+      <span>Listening · say <strong style="color: #F3F4F6; font-weight: 600">"done"</strong> or tap the shutter</span>
+    </div>
+  </div>
+
+  <div style="padding: 10px 20px 26px 20px; display: flex; align-items: center; justify-content: space-between">
+    <a href="SkillDetail.dc.html" style="width: 60px; height: 60px; border-radius: 30px; background: #1A1D23; border: 1px solid #2A2F38; color: #F3F4F6; font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center; text-decoration: none">Steps</a>
+    <a href="StepPass.dc.html" aria-label="Capture and verify" style="width: 80px; height: 80px; border-radius: 40px; background: #F5B82E; border: 5px solid #3A3320; box-sizing: border-box; display: flex; align-items: center; justify-content: center; text-decoration: none"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#141413" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4Z"/><circle cx="12" cy="13" r="3.5"/></svg></a>
+    <button style="width: 60px; height: 60px; border-radius: 30px; background: #1A1D23; border: 1px solid #2A2F38; color: #5B616C; font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center" disabled aria-label="Skip is not available on a safety gate">Skip</button>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

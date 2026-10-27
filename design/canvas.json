@@ -1,0 +1,47 @@
+{
+  "v": 3,
+  "createdOnFiles": {"v": 1, "at": "2026-10-27T16:10:00Z"},
+  "title": "Athena UI Design",
+  "launch": {"view": "canvas"},
+  "pages": [],
+  "boards": {
+    "Main.dc.html":            {"x": 0,    "y": 0,    "w": 390, "h": 844, "title": "1 · Marketplace", "radius": 44},
+    "SkillDetail.dc.html":     {"x": 470,  "y": 0,    "w": 390, "h": 844, "title": "2 · Skill detail", "radius": 44},
+    "SafetyGate.dc.html":      {"x": 940,  "y": 0,    "w": 390, "h": 844, "title": "3 · Safety gate", "radius": 44},
+    "StepPass.dc.html":        {"x": 1410, "y": 0,    "w": 390, "h": 844, "title": "4 · Step verified", "radius": 44},
+    "StepUnclear.dc.html":     {"x": 1880, "y": 0,    "w": 390, "h": 844, "title": "5 · Unclear → request photo", "radius": 44},
+    "StepFail.dc.html":        {"x": 2350, "y": 0,    "w": 390, "h": 844, "title": "6 · Fail + SAM overlay", "radius": 44},
+    "AuthorCapture.dc.html":   {"x": 0,    "y": 1300, "w": 390, "h": 844, "title": "7 · Author: capture", "radius": 44},
+    "AuthorReview.dc.html":    {"x": 470,  "y": 1300, "w": 390, "h": 844, "title": "8 · Author: compiled skill", "radius": 44},
+    "SessionComplete.dc.html": {"x": 940,  "y": 1300, "w": 390, "h": 844, "title": "9 · Session complete", "radius": 44},
+    "GlassesGate.dc.html":     {"x": 0,    "y": 2600, "w": 600, "h": 600, "title": "G1 · Lens card: safety gate"},
+    "GlassesStep.dc.html":     {"x": 680,  "y": 2600, "w": 600, "h": 600, "title": "G2 · Lens card: step"},
+    "GlassesUnclear.dc.html":  {"x": 1360, "y": 2600, "w": 600, "h": 600, "title": "G3 · Lens card: need better look"},
+    "ModeWatch.dc.html":       {"x": 0,    "y": 3700, "w": 390, "h": 844, "title": "A · Watch me (continuous frames, interjects)", "radius": 44},
+    "ModeSnapshot.dc.html":    {"x": 470,  "y": 3700, "w": 390, "h": 844, "title": "B · Snapshot check (photo on 'done')", "radius": 44},
+    "ModePTT.dc.html":         {"x": 940,  "y": 3700, "w": 390, "h": 844, "title": "C · Push to talk, DEFAULT (tap through the states)", "radius": 44, "is_interactive": true},
+    "GlassesWatch.dc.html":    {"x": 0,    "y": 5000, "w": 600, "h": 600, "title": "GA · Lens: watch-mode interjection"},
+    "GlassesChecking.dc.html": {"x": 680,  "y": 5000, "w": 600, "h": 600, "title": "GB · Lens: snapshot checking"},
+    "GlassesPTT.dc.html":      {"x": 1360, "y": 5000, "w": 600, "h": 600, "title": "GC · Lens: push to talk"}
+  },
+  "order": [
+    "Main.dc.html", "SkillDetail.dc.html", "SafetyGate.dc.html", "StepPass.dc.html", "StepUnclear.dc.html", "StepFail.dc.html",
+    "AuthorCapture.dc.html", "AuthorReview.dc.html", "SessionComplete.dc.html",
+    "GlassesGate.dc.html", "GlassesStep.dc.html", "GlassesUnclear.dc.html",
+    "ModeWatch.dc.html", "ModeSnapshot.dc.html", "ModePTT.dc.html",
+    "GlassesWatch.dc.html", "GlassesChecking.dc.html", "GlassesPTT.dc.html"
+  ],
+  "notes": {
+    "t-learner": {"x": 0, "y": -300, "text": "Athena · Learner flow · phone 390×844", "kind": "title1", "maxW": 2740},
+    "t-author":  {"x": 0, "y": 1000, "text": "Author flow · compile a skill from photos + voice notes", "kind": "title1", "maxW": 2740},
+    "t-glasses": {"x": 0, "y": 2300, "text": "Meta Ray-Ban Display · 600×600 lens cards driven from the phone", "kind": "title1", "maxW": 2740},
+    "t-modes":   {"x": 0, "y": 3400, "text": "Three ways to talk to the guide · pick one as default", "kind": "title1", "maxW": 2740},
+    "t-modes-glasses": {"x": 0, "y": 4700, "text": "Same three modes on the lens", "kind": "title1", "maxW": 2740},
+    "n-verdict": {"x": 1410, "y": 1300, "w": 420, "text": "Verdict system (one Muse Spark structured-output call per check)\n\nPASS · teal · advance automatically, show next step\nFAIL · coral · explain what is wrong, overlay SAM 3.1 mask on the part, offer reference photo\nUNCLEAR · sky blue · ask for ONE specific extra photo (what + angle + distance). Never guess.\nSAFETY GATE · amber shield · same loop, but only PASS unlocks the next step; no skip button.\n\nColors differ in lightness, not just hue, and every verdict also carries an icon + a word.", "fill": "blue", "size": "s"},
+    "n-voice": {"x": 1870, "y": 1300, "w": 420, "text": "Hands-free rules\n\nMic is always on during a session (Muse Voice Transcribe realtime, ENDPOINTING mode, keywords = this skill's part names).\n\n'done' / 'check' → capture + verify\n'again' / 'repeat' → re-read the step\n'what is this' → point-and-ask on current frame\n'help' / 'I'm stuck' → escalate: text the author or find a pro\n\nEvery spoken reply is also printed in the sheet so the flow works muted.", "fill": "orange", "size": "s"},
+    "n-glasses": {"x": 2040, "y": 2600, "w": 460, "text": "Lens card constraints (Device Access Toolkit)\n\n· 600×600 private display, right lens. Phone serializes a FlexBox/Text/Image/Button/Icon layout and sends it over Bluetooth; each send replaces the whole card. Glasses hold no state.\n· Keep a 48 px safe margin; one idea per card; ≥34 px text (it floats over the real world).\n· Camera frames come from the glasses stream (720×1280 up to 30 fps) → phone → Muse Spark. Verify on 'done' or a Neural Band pinch.\n· Audio: open-ear speakers read the instruction; mic feeds Voice Transcribe over normal Bluetooth.\n· Non-Display glasses (Ray-Ban Meta Gen 2): same session, audio only, phone shows the card.\n· Mock Device Kit simulates the camera path without hardware; the display needs real glasses.", "fill": "gray", "size": "s"},
+    "n-modes": {"x": 1410, "y": 3700, "w": 520, "text": "How the three modes compare (no Meta model streams video; all three are request/response under the hood)\n\nA · WATCH ME\nPhone samples 1 low-res frame every 2 s and sends it with the running transcript; the guide may interject. Feels most like a video call. Latency to interject 3–5 s. Cost ≈ $0.03–0.05 per minute. Needs careful prompting so it stays quiet unless something is wrong. Hardest to build and to demo reliably.\n\nB · SNAPSHOT CHECK\nOne full-res photo on 'done'; strict pass / fail / unclear verdict against the author's reference. Cheapest, most accurate, and it is the verification core every mode ends with. Not conversational on its own.\n\nC · PUSH TO TALK\nTap: record voice + grab one frame. Tap: send. Reply arrives as text and speech, then the button is free again. One clear turn at a time, no accidental triggers, works in noisy kitchens, easiest to build. Latency 2–4 s per turn. Cost ≈ $0.01 per turn.\n\nRecommendation: C as the default conversation mode, B as the step-verification call in every mode, A as an opt-in 'watch me' toggle on steps the author flags as error-prone. Build C + B first, add A if day 5 is free.", "fill": "green", "size": "s"},
+    "n-ptt-states": {"x": 1410, "y": 4480, "w": 520, "text": "Push-to-talk state machine (artboard C is live: press Play and tap the button)\n\nIDLE → tap → RECORDING (video clip + mic, red frame; Voice Transcribe runs live so the transcript is ready the moment you stop)\nRECORDING → tap → THINKING (mp4 clip uploaded to the Files API + transcript sent to Muse Spark in one request; button disabled)\nTHINKING → reply streams → ANSWERING (bubble + phone TTS, 'SPEAKING')\nANSWERING → speech ends → IDLE (transcript stays)\n\nLayout: the feed is full screen. Chat lives in the bottom ~40% and is masked so bubbles fade to nothing just under mid-screen. Older turns scroll up into the fade. Cap clips at ~10 s (50 MB inline limit; longer goes via Files API).\n\nThe teal check button runs the strict snapshot verification (mode B) without leaving this screen.", "fill": "purple", "size": "s"}
+  },
+  "designSystems": []
+}
