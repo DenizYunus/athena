@@ -6,7 +6,7 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
 from . import guide
@@ -27,9 +27,12 @@ skills = SkillStore()
 sessions = SessionStore()
 
 
-def meta_client() -> Any:
-    """Dependency so tests can override it with a fake."""
-    return get_client()
+def meta_client(x_model_api_key: str | None = Header(default=None)) -> Any:
+    """Dependency so tests can override it with a fake. The app may send its own key."""
+    try:
+        return get_client(x_model_api_key)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 
 def _skill_or_404(skill_id: str) -> Skill:
@@ -48,7 +51,9 @@ def _session_or_404(session_id: str) -> Session:
 
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True, "skills": len(skills.list())}
+    from .config import settings
+
+    return {"ok": True, "skills": len(skills.list()), "server_has_key": bool(settings.api_key)}
 
 
 @app.get("/skills", response_model=list[Skill])
