@@ -1,0 +1,54 @@
+{
+  "expo": {
+    "name": "Athena",
+    "slug": "athena",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0F1115",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F1115"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "app.athena.guide",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Athena shows the guide what you are working on.",
+        "NSMicrophoneUsageDescription": "Athena records your question with the clip."
+      }
+    },
+    "android": {
+      "package": "app.athena.guide",
+      "permissions": ["CAMERA", "RECORD_AUDIO"],
+      "adaptiveIcon": {
+        "backgroundColor": "#0F1115",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Athena shows the guide what you are working on.",
+          "microphonePermission": "Athena records your question with the clip.",
+          "recordAudioAndroid": true
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ]
+  }
+}

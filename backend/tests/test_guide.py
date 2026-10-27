@@ -120,3 +120,16 @@ async def test_verify_keeps_hesitant_pass_on_normal_step(fake_client, skill, jpe
     session.current_step = 2
     verdict = await guide.verify(fake_client, skill, session, jpeg_bytes)
     assert verdict.status == "pass"
+
+
+def test_client_key_resolution(monkeypatch):
+    from app import meta_client
+
+    monkeypatch.setattr(meta_client.settings, "api_key", "")
+    with pytest.raises(RuntimeError):
+        meta_client.get_client(None)
+    c = meta_client.get_client("LLM|1|phone-key")
+    assert c.api_key == "LLM|1|phone-key"
+    monkeypatch.setattr(meta_client.settings, "api_key", "LLM|2|server-key")
+    assert meta_client.get_client(None).api_key == "LLM|2|server-key"
+    assert meta_client.get_client("  ").api_key == "LLM|2|server-key"

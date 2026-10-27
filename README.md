@@ -11,6 +11,7 @@ Everything in this repository was created during the event. Commit history start
 | Date | What |
 |---|---|
 | Oct 27 | Research brief (`RESEARCH.md`), UI design (`design/`, 18 artboards), backend skeleton: skill schema, seed skill, push-to-talk turn (video clip + transcript → Muse Spark), snapshot verification (reference photo + user photo → structured verdict), session API, tests. |
+| Oct 27 | Android app (`mobile/`, Expo): marketplace, skill detail, settings, and the push-to-talk session over the live camera: record a clip with voice, send, hear the reply; check button runs the snapshot verification. First APK on the Releases page. |
 
 ## Meta models used
 
@@ -23,6 +24,41 @@ Everything in this repository was created during the event. Commit history start
 ## Interaction model
 
 Push to talk is the default. Tap once: the phone records a video clip and the mic. Tap again: the clip and the transcript go to the guide in one request, the reply comes back as text and is spoken by the phone. A separate check button takes one full-resolution photo and runs the strict verification against the expert's reference. Safety gates use the same verification but only a pass unlocks the next step. See `design/` for the screens and `RESEARCH.md` for the API facts behind these choices.
+
+## Try it on a phone in three steps
+
+1. **Backend on your Mac** (same Wi-Fi as the phone):
+
+   ```bash
+   backend/run.sh
+   ```
+
+   It prints the URL to enter in the app. The Meta API key can live in `backend/.env` (`MODEL_API_KEY=...`) or be typed into the app's Settings; the app sends it as the `X-Model-API-Key` header and the server uses it for that request.
+
+2. **Install the APK** from the Releases page on an Android phone (allow installs from unknown sources).
+
+3. **In the app**: Settings → Backend URL → Test connection → Save. Then open the fridge skill, Install & start, and talk to the guide: tap the big button, show and ask, tap again to send. Tap ✓ to verify a step from a photo.
+
+## Mobile app
+
+Expo SDK 58, React Native, TypeScript, no navigation library (four screens, one switch). `expo-camera` records the clip with audio, `expo-speech` reads replies aloud, `expo-secure-store` keeps the backend URL and key.
+
+```bash
+cd mobile && npm install
+npx expo start              # dev server; press a for an emulator or scan with Expo Go
+```
+
+Build the APK locally (needs JDK 17 and the Android SDK; `brew install openjdk@17 && brew install --cask android-commandlinetools`):
+
+```bash
+cd mobile
+npx expo prebuild --platform android --no-install
+echo "sdk.dir=/opt/homebrew/share/android-commandlinetools" > android/local.properties
+cd android && JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ./gradlew assembleRelease
+# → android/app/build/outputs/apk/release/app-release.apk
+```
+
+The release build is signed with the debug keystore, which is fine for sideloading and demos.
 
 ## Backend
 
@@ -72,6 +108,11 @@ backend/
   skills/          seed skills as JSON
   scripts/         smoke scripts against the live API
   tests/           pytest, no network
+  run.sh           start on 0.0.0.0 and print the LAN URL
+mobile/
+  App.tsx          screen switch
+  src/api.ts       backend client
+  src/screens/     Marketplace, SkillDetail, Session (push to talk), Settings
 ```
 
 ## License
