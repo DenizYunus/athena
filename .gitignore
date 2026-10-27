@@ -34,3 +34,9 @@ backend/.local/
 
 # Skills compiled at runtime (with the author's photos)
 backend/skills/compiled/
+
+# Demo footage and narration takes
+demo/clips/
+demo/narration/
+*.mp4
+*.m4a
