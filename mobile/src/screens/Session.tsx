@@ -1,12 +1,16 @@
 // Push-to-talk session over the live camera feed.
-// Tap the big button: record video + mic. Tap again: send the clip to the guide.
+// Tap the big button: record video + mic, and stream the mic to Voice Transcribe so the
+// words appear while you talk. Tap again: the clip and the transcript go to the guide.
 // The reply shows as a bubble and is spoken. The check button takes one photo and runs
-// the strict verification; a pass advances the step.
+// the strict verification; SAM 3.1 marks the part on a fail or unclear verdict.
+import { useAudioStream } from "expo-audio";
 import { CameraView, useCameraPermissions, useMicrophonePermissions } from "expo-camera";
 import * as Speech from "expo-speech";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
-import { Api, Session, Skill, Verdict } from "../api";
+import { Api, Highlight, Session, Skill, Verdict } from "../api";
+import { HighlightOverlay } from "../HighlightOverlay";
+import { LiveTranscript } from "../live";
 import { colors } from "../theme";
 import { GhostButton, PrimaryButton } from "../ui";
 
@@ -25,32 +29,41 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [seconds, setSeconds] = useState(0);
   const [showSteps, setShowSteps] = useState(false);
+  const [liveText, setLiveText] = useState("");
+  const [liveState, setLiveState] = useState<"off" | "on" | "failed">("off");
+  const [overlay, setOverlay] = useState<{ photoUri: string; highlight: Highlight; color: string; caption: string } | null>(null);
   const nextId = useRef(1);
   const recordingPromise = useRef<Promise<{ uri: string } | undefined> | null>(null);
+  const live = useRef<LiveTranscript | null>(null);
+  const liveDisabled = useRef(false); // set when the mic stream and the video recorder cannot share the mic
 
   const step = useMemo(() => skill.steps.find((st) => st.n === session.current_step) ?? skill.steps[0], [skill, session.current_step]);
   const total = skill.steps.length;
+
+  // Raw PCM from the mic while recording, forwarded to the transcription relay.
+  const { stream: mic } = useAudioStream({
+    sampleRate: 16000,
+    channels: 1,
+    encoding: "int16",
+    onBuffer: (buf) => live.current?.push(buf.data, buf.sampleRate, buf.channels),
+  });
 
   const push = useCallback((b: Omit<Bubble, "id">) => {
     setBubbles((prev) => [...prev, { ...b, id: nextId.current++ }].slice(-8));
   }, []);
 
-  const say = useCallback(
-    (text: string) => {
-      Speech.stop();
-      setPhase("speaking");
-      Speech.speak(text, {
-        language: "en-US",
-        rate: 1.0,
-        onDone: () => setPhase("idle"),
-        onStopped: () => setPhase("idle"),
-        onError: () => setPhase("idle"),
-      });
-    },
-    [],
-  );
+  const say = useCallback((text: string) => {
+    Speech.stop();
+    setPhase("speaking");
+    Speech.speak(text, {
+      language: "en-US",
+      rate: 1.0,
+      onDone: () => setPhase("idle"),
+      onStopped: () => setPhase("idle"),
+      onError: () => setPhase("idle"),
+    });
+  }, []);
 
-  // Permissions, then announce the first step.
   useEffect(() => {
     (async () => {
       if (!camPerm?.granted) await requestCam();
@@ -71,7 +84,16 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.current_step]);
 
-  // Recording timer
+  useEffect(() => {
+    return () => {
+      live.current?.close();
+      try {
+        mic.stop();
+      } catch {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (phase !== "recording") {
       setSeconds(0);
@@ -81,50 +103,111 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
     return () => clearInterval(t);
   }, [phase]);
 
-  async function onTapRecord() {
-    if (!camera.current) return;
-    if (phase === "idle") {
-      Speech.stop();
-      if (cameraMode !== "video") {
-        setCameraMode("video");
-        await wait(400);
-      }
-      setPhase("recording");
-      recordingPromise.current = camera.current.recordAsync({ maxDuration: 20 });
-      // If maxDuration fires first, recordAsync resolves on its own; send then.
-      recordingPromise.current.then((r) => {
-        if (r?.uri && phaseRef.current === "recording") sendClip(r.uri);
-      });
-      return;
-    }
-    if (phase === "recording") {
-      camera.current.stopRecording();
-      // sendClip is called from the promise above
-    }
-  }
-
   const phaseRef = useRef<Phase>("idle");
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
 
+  async function startLive() {
+    if (liveDisabled.current) return;
+    const lt = new LiveTranscript(api.asrUrl(), skill.id, api.apiKey, {
+      onPartial: (t) => setLiveText(t),
+      onError: () => setLiveState("failed"),
+    });
+    live.current = lt;
+    setLiveText("");
+    setLiveState("on");
+    lt.open(); // not awaited: audio is buffered until the relay is ready
+    try {
+      await mic.start();
+    } catch {
+      setLiveState("failed");
+      lt.close();
+      live.current = null;
+    }
+  }
+
+  async function stopLive(): Promise<string> {
+    try {
+      mic.stop();
+    } catch {}
+    const lt = live.current;
+    live.current = null;
+    if (!lt) return "";
+    const text = await lt.finish();
+    lt.close();
+    return text;
+  }
+
+  async function onTapRecord() {
+    if (!camera.current) return;
+    if (phase === "idle" || phase === "speaking") {
+      Speech.stop();
+      setOverlay(null);
+      if (cameraMode !== "video") {
+        setCameraMode("video");
+        await wait(400);
+      }
+      setPhase("recording");
+      await startLive();
+      try {
+        recordingPromise.current = camera.current.recordAsync({ maxDuration: 20 });
+      } catch (e) {
+        // The video recorder could not open the mic while the live stream holds it: give up on live.
+        await stopLive();
+        liveDisabled.current = true;
+        setLiveState("failed");
+        recordingPromise.current = camera.current.recordAsync({ maxDuration: 20 });
+      }
+      recordingPromise.current
+        .then((r) => {
+          if (r?.uri && phaseRef.current === "recording") sendClip(r.uri);
+          else if (!r?.uri) {
+            stopLive();
+            setPhase("idle");
+          }
+        })
+        .catch(async (e) => {
+          await stopLive();
+          if (!liveDisabled.current && live.current === null && liveState !== "failed") {
+            // first failure with the live stream on: remember and let the user try again
+            liveDisabled.current = true;
+          }
+          push({ who: "guide", text: friendly(e), tone: "fail" });
+          setPhase("idle");
+        });
+      return;
+    }
+    if (phase === "recording") {
+      camera.current.stopRecording();
+    }
+  }
+
   async function sendClip(uri: string) {
     setPhase("sending");
-    push({ who: "user", text: `Clip sent · ${Math.max(seconds, 1)} s · the guide hears your audio` });
+    const heard = await stopLive();
+    const secs = Math.max(seconds, 1);
+    const userLine = heard ? heard : `Clip sent · ${secs} s · transcribing your words…`;
+    const userId = nextId.current++;
+    setBubbles((prev) => [...prev, { id: userId, who: "user" as const, text: userLine }].slice(-8));
+    setLiveText("");
     try {
-      const res = await api.turn(session.id, { clipUri: uri });
+      const res = await api.turn(session.id, { clipUri: uri, transcript: heard });
+      if (!heard && res.transcript) {
+        setBubbles((prev) => prev.map((b) => (b.id === userId ? { ...b, text: res.transcript } : b)));
+      }
       push({ who: "guide", text: res.reply });
       say(res.reply);
     } catch (e: any) {
-      const msg = friendly(e);
-      push({ who: "guide", text: msg, tone: "fail" });
+      push({ who: "guide", text: friendly(e), tone: "fail" });
       setPhase("idle");
     }
   }
 
   async function onTapCheck() {
-    if (!camera.current || phase !== "idle") return;
+    if (!camera.current || (phase !== "idle" && phase !== "speaking")) return;
     Speech.stop();
+    setOverlay(null);
     setPhase("checking");
     try {
       if (cameraMode !== "picture") {
@@ -137,13 +220,17 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
       const res = await api.verify(session.id, photo.uri);
       const v = res.verdict;
       push({ who: "guide", text: verdictLine(v, step.safety_gate), tone: v.status });
+      if (res.highlight && res.highlight.objects.length) {
+        const color = toneColor(v.status);
+        const caption = v.status === "pass" ? "Verified" : v.status === "fail" ? "Look here" : "This is what I see";
+        setOverlay({ photoUri: photo.uri, highlight: res.highlight, color, caption });
+      }
       setSession((s) => ({ ...s, current_step: res.current_step, completed: res.completed }));
       if (res.completed) {
         say(`${v.reason} That was the last step. Nice work.`);
       } else if (!res.advanced) {
         say(verdictSpeech(v));
       } else {
-        // The step-change effect announces the next step; say the pass briefly first.
         Speech.speak(`Step ${step.n} verified.`, { language: "en-US" });
         setPhase("idle");
       }
@@ -176,12 +263,12 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
   }
 
   const visible = bubbles.slice(-BUBBLE_OPACITY.length);
+  const dismissOverlay = useCallback(() => setOverlay(null), []);
 
   return (
     <View style={s.root}>
       <CameraView ref={camera} style={StyleSheet.absoluteFill} facing="back" mode={cameraMode} mute={false} />
 
-      {/* top chrome */}
       <View style={s.top}>
         <Pressable onPress={onExit} style={s.roundBtn} accessibilityLabel="Exit session">
           <Text style={s.roundBtnText}>✕</Text>
@@ -192,7 +279,7 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
         {phase === "recording" ? (
           <View style={[s.pill, { borderColor: colors.fail }]}>
             <View style={[s.dot, { backgroundColor: colors.fail }]} />
-            <Text style={[s.pillText, { color: colors.fail }]}>REC {fmt(seconds)} · video + voice</Text>
+            <Text style={[s.pillText, { color: colors.fail }]}>REC {fmt(seconds)}</Text>
           </View>
         ) : (
           <View style={s.pill}>
@@ -214,29 +301,25 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
       </View>
       {phase === "recording" ? <View pointerEvents="none" style={s.recFrame} /> : null}
 
-      {/* chat, bottom ~40%, fading upward */}
       <View style={s.chat} pointerEvents="none">
         {visible.map((b, i) => {
           const fromBottom = visible.length - 1 - i;
           const opacity = BUBBLE_OPACITY[fromBottom] ?? 0;
           const tone = b.tone ? toneColor(b.tone) : undefined;
           return (
-            <View
-              key={b.id}
-              style={[
-                s.bubble,
-                b.who === "user" ? s.bubbleUser : s.bubbleGuide,
-                tone ? { borderColor: tone, borderWidth: 1 } : null,
-                { opacity },
-              ]}
-            >
+            <View key={b.id} style={[s.bubble, b.who === "user" ? s.bubbleUser : s.bubbleGuide, tone ? { borderColor: tone, borderWidth: 1 } : null, { opacity }]}>
               <Text style={[s.bubbleText, b.who === "guide" && { color: colors.text2 }, tone ? { color: colors.text } : null]}>{b.text}</Text>
             </View>
           );
         })}
+        {phase === "recording" ? (
+          <View style={[s.bubble, s.bubbleUser, s.bubbleLive]}>
+            <Text style={s.liveLabel}>{liveState === "failed" ? "LISTENING (transcript after you send)" : "LISTENING"}</Text>
+            <Text style={s.bubbleText}>{liveText || (liveState === "failed" ? "Your words are transcribed from the clip." : "…")}</Text>
+          </View>
+        ) : null}
       </View>
 
-      {/* controls */}
       <View style={s.controls}>
         <Text style={s.hint}>{hintFor(phase, session.completed)}</Text>
         <View style={s.controlRow}>
@@ -286,6 +369,8 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
           </View>
         </View>
       ) : null}
+
+      {overlay ? <HighlightOverlay photoUri={overlay.photoUri} highlight={overlay.highlight} color={overlay.color} caption={overlay.caption} onDismiss={dismissOverlay} /> : null}
     </View>
   );
 }
@@ -357,6 +442,8 @@ const s = StyleSheet.create({
   bubble: { maxWidth: 300, paddingVertical: 9, paddingHorizontal: 13, borderRadius: 16 },
   bubbleGuide: { alignSelf: "flex-start", backgroundColor: "rgba(26,29,35,0.92)", borderBottomLeftRadius: 4 },
   bubbleUser: { alignSelf: "flex-end", backgroundColor: "rgba(42,47,56,0.95)", borderBottomRightRadius: 4 },
+  bubbleLive: { borderWidth: 1, borderColor: colors.amber, minWidth: 180 },
+  liveLabel: { color: colors.amber, fontSize: 10, fontWeight: "700", letterSpacing: 0.6, marginBottom: 2 },
   bubbleText: { color: colors.text, fontSize: 14, lineHeight: 19 },
   controls: { position: "absolute", left: 0, right: 0, bottom: 0, height: 150, paddingHorizontal: 20, paddingBottom: 26, justifyContent: "flex-end", alignItems: "center", gap: 10 },
   hint: { color: colors.text, fontSize: 13, fontWeight: "500", textShadowColor: "rgba(0,0,0,0.8)", textShadowRadius: 3 },

@@ -38,13 +38,13 @@ def image_block(jpeg_bytes: bytes) -> dict[str, Any]:
     return {"type": "input_image", "image_url": f"data:image/jpeg;base64,{b64}"}
 
 
-def image_block_from_source(source: str) -> dict[str, Any]:
+def image_block_from_source(source: str, base_dir: Path | None = None) -> dict[str, Any]:
     """A reference image given as a URL or a path relative to the skills dir."""
     if source.startswith("http://") or source.startswith("https://"):
         return {"type": "input_image", "image_url": source}
     path = Path(source)
     if not path.is_absolute():
-        path = settings.skills_dir / path
+        path = (base_dir or settings.skills_dir) / path
     return image_block(prepare_image(path.read_bytes()))
 
 

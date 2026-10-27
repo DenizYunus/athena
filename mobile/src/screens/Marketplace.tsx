@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, FlatList, Image, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { Api, Skill } from "../api";
 import { colors, radius } from "../theme";
-import { Chip, GhostButton } from "../ui";
+import { Chip, GhostButton, PrimaryButton } from "../ui";
 
-export function MarketplaceScreen({ api, onOpen, onSettings }: { api: Api; onOpen: (skill: Skill) => void; onSettings: () => void }) {
+export function MarketplaceScreen({ api, onOpen, onSettings, onCreate }: { api: Api; onOpen: (skill: Skill) => void; onSettings: () => void; onCreate: () => void }) {
   const [skills, setSkills] = useState<Skill[] | null>(null);
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -36,6 +36,13 @@ export function MarketplaceScreen({ api, onOpen, onSettings }: { api: Api; onOpe
         <GhostButton label="Settings" onPress={onSettings} color={colors.muted} style={{ height: 40 }} />
       </View>
       <Text style={s.h1}>What needs fixing?</Text>
+      <Pressable onPress={onCreate} style={({ pressed }) => [s.teach, pressed && { opacity: 0.85 }]} accessibilityRole="button">
+        <View style={{ flex: 1 }}>
+          <Text style={s.teachTitle}>Teach a skill</Text>
+          <Text style={s.teachText}>Photograph the job, say what you did. Muse Spark writes the steps and the checks.</Text>
+        </View>
+        <Text style={s.teachArrow}>+</Text>
+      </Pressable>
 
       {error ? (
         <View style={s.errorBox}>
@@ -57,9 +64,15 @@ export function MarketplaceScreen({ api, onOpen, onSettings }: { api: Api; onOpe
           renderItem={({ item }) => (
             <Pressable onPress={() => onOpen(item)} style={({ pressed }) => [s.card, pressed && { opacity: 0.85 }]}>
               <View style={s.thumb}>
+                {thumbFor(api, item) ? <Image source={{ uri: thumbFor(api, item)! }} style={{ width: "100%", height: "100%" }} resizeMode="cover" /> : null}
                 <Chip color={colors.pass} style={{ position: "absolute", top: 10, left: 10 }}>
                   {item.steps.filter((st) => st.safety_gate).length} safety gate · camera-checked
                 </Chip>
+                {item.compiled ? (
+                  <Chip color={colors.amber} style={{ position: "absolute", top: 10, right: 10, borderColor: colors.amber }}>
+                    yours
+                  </Chip>
+                ) : null}
               </View>
               <View style={{ padding: 14, gap: 6 }}>
                 <Text style={s.title}>{item.title}</Text>
@@ -81,7 +94,16 @@ export function MarketplaceScreen({ api, onOpen, onSettings }: { api: Api; onOpe
   );
 }
 
+function thumbFor(api: Api, skill: Skill): string | null {
+  const withRef = skill.steps.find((st) => st.reference_image);
+  return withRef ? api.mediaUrl(skill.id, withRef.reference_image) : null;
+}
+
 const s = StyleSheet.create({
+  teach: { flexDirection: "row", alignItems: "center", gap: 12, padding: 14, borderRadius: 16, backgroundColor: colors.amberDark, borderWidth: 1, borderColor: colors.amber, marginBottom: 14 },
+  teachTitle: { color: colors.amber, fontSize: 15, fontWeight: "700" },
+  teachText: { color: colors.text2, fontSize: 12, lineHeight: 16, marginTop: 2 },
+  teachArrow: { color: colors.amber, fontSize: 28, fontWeight: "300" },
   root: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: 20, paddingTop: 56 },
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
   logo: { width: 22, height: 22, borderRadius: 4, backgroundColor: colors.amber, transform: [{ rotate: "45deg" }], marginLeft: 3 },

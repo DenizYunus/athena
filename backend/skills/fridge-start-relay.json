@@ -6,18 +6,38 @@
   "difficulty": 2,
   "est_minutes": 25,
   "price_usd": 6,
-  "tools": ["#2 Phillips screwdriver", "multimeter", "needle-nose pliers"],
-  "parts": ["start relay matching the fridge model"],
-  "vocabulary": ["start relay", "overload protector", "compressor", "relay cover", "compressor pins", "rear access panel"],
+  "tools": [
+    "#2 Phillips screwdriver",
+    "multimeter",
+    "needle-nose pliers"
+  ],
+  "parts": [
+    "start relay matching the fridge model"
+  ],
+  "vocabulary": [
+    "start relay",
+    "overload protector",
+    "compressor",
+    "relay cover",
+    "compressor pins",
+    "rear access panel"
+  ],
   "steps": [
     {
       "n": 1,
       "instruction": "Pull the fridge away from the wall and unplug it from the outlet.",
       "expected_state": "The power cord's plug is visibly out of the wall outlet, with both the plug and the empty outlet in the same frame.",
       "reference_image": null,
-      "sam_concepts": ["power plug", "wall outlet"],
+      "sam_concepts": [
+        "power cord plug",
+        "electrical outlet",
+        "black power cord"
+      ],
       "verify_hints": "Reject if the cord is still in the outlet or if the plug is not in frame. A switched-off thermostat does not count.",
-      "common_mistakes": ["Turning the thermostat off instead of unplugging", "Only showing the plug without the outlet"],
+      "common_mistakes": [
+        "Turning the thermostat off instead of unplugging",
+        "Only showing the plug without the outlet"
+      ],
       "safety_gate": true,
       "gate_requirement": "Fridge disconnected from mains power, plug visibly out of the outlet.",
       "est_minutes": 2
@@ -26,10 +46,16 @@
       "n": 2,
       "instruction": "Remove the rear access panel at the bottom back of the fridge. It is usually held by four screws.",
       "expected_state": "The rear access panel is off and the compressor (a black dome-shaped unit) is exposed.",
-      "reference_image": null,
-      "sam_concepts": ["compressor", "access panel"],
+      "reference_image": "media/fridge-start-relay/compressor-exposed.jpg",
+      "sam_concepts": [
+        "black round tank",
+        "black dome",
+        "metal panel"
+      ],
       "verify_hints": "Compressor must be visible. Screws out of frame is fine.",
-      "common_mistakes": ["Removing the wrong panel (the condenser fan cover)"],
+      "common_mistakes": [
+        "Removing the wrong panel (the condenser fan cover)"
+      ],
       "safety_gate": false,
       "est_minutes": 4
     },
@@ -38,9 +64,15 @@
       "instruction": "Unclip the plastic relay cover on the side of the compressor. There is a tab at the bottom.",
       "expected_state": "The relay cover is off and the start relay (a black rectangular box plugged onto the compressor) is exposed with its wires still attached.",
       "reference_image": null,
-      "sam_concepts": ["start relay", "relay cover"],
+      "sam_concepts": [
+        "black plastic box",
+        "small black box",
+        "plastic cover"
+      ],
       "verify_hints": "The relay should still be attached in this step. If it is already off, that is step 4 and still passes here.",
-      "common_mistakes": ["Prying the cover from the top and cracking it"],
+      "common_mistakes": [
+        "Prying the cover from the top and cracking it"
+      ],
       "safety_gate": false,
       "est_minutes": 2
     },
@@ -49,9 +81,17 @@
       "instruction": "Pull the old start relay straight off the compressor pins. Grip the body, not the wires. Wiggle gently, do not twist.",
       "expected_state": "The relay is detached from the compressor and three bare metal pins are visible on the compressor body.",
       "reference_image": null,
-      "sam_concepts": ["start relay", "compressor pins"],
+      "sam_concepts": [
+        "black plastic box",
+        "metal pins",
+        "black cylinder"
+      ],
       "verify_hints": "All three pins must be visible. If a hand or the relay hides any pin, ask for a photo from below at about 20 cm.",
-      "common_mistakes": ["Pulling by the wire harness", "Twisting and bending the pins", "Missing a retaining clip"],
+      "common_mistakes": [
+        "Pulling by the wire harness",
+        "Twisting and bending the pins",
+        "Missing a retaining clip"
+      ],
       "safety_gate": false,
       "watch_me": true,
       "est_minutes": 3
@@ -61,9 +101,15 @@
       "instruction": "Push the new relay onto the three pins with its notch facing the overload protector, until it seats with a click.",
       "expected_state": "The new relay is seated flush on the compressor pins with the notch on the relay facing the overload protector (the small block next to it).",
       "reference_image": null,
-      "sam_concepts": ["start relay", "overload protector"],
+      "sam_concepts": [
+        "black plastic box",
+        "small black box"
+      ],
       "verify_hints": "Orientation is the whole test. Notch away from the overload protector is a fail. If the notch is hidden, ask for a photo straight on from the side.",
-      "common_mistakes": ["Seating the relay upside down", "Leaving it half-seated"],
+      "common_mistakes": [
+        "Seating the relay upside down",
+        "Leaving it half-seated"
+      ],
       "safety_gate": false,
       "watch_me": true,
       "est_minutes": 3
@@ -73,9 +119,15 @@
       "instruction": "Reconnect the wire harness to the relay and snap the relay cover back on.",
       "expected_state": "The relay cover is back in place with the wire harness entering it; no loose connectors visible.",
       "reference_image": null,
-      "sam_concepts": ["relay cover", "wire harness"],
+      "sam_concepts": [
+        "plastic cover",
+        "black plastic box"
+      ],
       "verify_hints": "Any dangling connector is a fail.",
-      "common_mistakes": ["Forgetting the ground wire", "Pinching a wire under the cover"],
+      "common_mistakes": [
+        "Forgetting the ground wire",
+        "Pinching a wire under the cover"
+      ],
       "safety_gate": false,
       "est_minutes": 3
     },
@@ -84,9 +136,14 @@
       "instruction": "Refit the rear access panel, plug the fridge back in, and listen for the compressor to start within about a minute.",
       "expected_state": "The rear panel is back on and the plug is in the outlet. A clip with audible compressor hum is ideal.",
       "reference_image": null,
-      "sam_concepts": ["power plug", "access panel"],
+      "sam_concepts": [
+        "power cord plug",
+        "electrical outlet"
+      ],
       "verify_hints": "Pass on panel refitted and plug in. If a clip is sent, listen for a steady hum rather than a repeated click, which means the relay is still wrong.",
-      "common_mistakes": ["Plugging in before the panel is on"],
+      "common_mistakes": [
+        "Plugging in before the panel is on"
+      ],
       "safety_gate": false,
       "est_minutes": 5
     }

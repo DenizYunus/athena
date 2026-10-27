@@ -5,6 +5,8 @@ export type Step = {
   n: number;
   instruction: string;
   expected_state: string;
+  reference_image: string | null;
+  sam_concepts: string[];
   safety_gate: boolean;
   gate_requirement: string | null;
   watch_me: boolean;
@@ -22,7 +24,9 @@ export type Skill = {
   price_usd: number;
   tools: string[];
   parts: string[];
+  vocabulary: string[];
   steps: Step[];
+  compiled: boolean;
 };
 
 export type Session = {
@@ -42,12 +46,29 @@ export type Verdict = {
   safety_concern: boolean;
 };
 
+export type Highlight = {
+  concept: string;
+  frame_width: number;
+  frame_height: number;
+  objects: {
+    id: number;
+    box: { x1: number; y1: number; x2: number; y2: number };
+    confidence: number;
+    mask: { left: number; top: number; width: number; height: number; path: string } | null;
+  }[];
+};
+
 export type VerifyResponse = {
   verdict: Verdict;
   advanced: boolean;
   current_step: number;
   completed: boolean;
+  highlight: Highlight | null;
 };
+
+export type TurnResponse = { reply: string; transcript: string; current_step: number };
+
+export type Capture = { photoUri: string | null; note: string };
 
 export class ApiError extends Error {
   constructor(message: string, public status?: number) {
@@ -57,6 +78,10 @@ export class ApiError extends Error {
 
 export class Api {
   constructor(private settings: Settings) {}
+
+  get apiKey(): string {
+    return this.settings.apiKey;
+  }
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
     const h: Record<string, string> = { ...extra };
@@ -69,6 +94,19 @@ export class Api {
     return `${this.settings.backendUrl}${path}`;
   }
 
+  /** ws://host/asr for the live transcript relay. */
+  asrUrl(): string {
+    return this.url("/asr").replace(/^http/, "ws");
+  }
+
+  /** Where a step's reference photo can be loaded from, or null. */
+  mediaUrl(skillId: string, reference: string | null): string | null {
+    if (!reference) return null;
+    if (/^https?:\/\//.test(reference)) return reference;
+    const name = reference.split("/").pop();
+    return name ? this.url(`/skills/${skillId}/media/${name}`) : null;
+  }
+
   private async handle<T>(res: Response): Promise<T> {
     if (!res.ok) {
       let detail = res.statusText;
@@ -78,10 +116,11 @@ export class Api {
       } catch {}
       throw new ApiError(`${res.status}: ${detail}`, res.status);
     }
+    if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
   }
 
-  async health(): Promise<{ ok: boolean; skills: number; server_has_key: boolean }> {
+  async health(): Promise<{ ok: boolean; skills: number; server_has_key: boolean; ffmpeg: boolean }> {
     const res = await fetch(this.url("/health"), { headers: this.headers() });
     return this.handle(res);
   }
@@ -96,6 +135,11 @@ export class Api {
     return this.handle(res);
   }
 
+  async deleteSkill(id: string): Promise<void> {
+    const res = await fetch(this.url(`/skills/${id}`), { method: "DELETE", headers: this.headers() });
+    return this.handle(res);
+  }
+
   async startSession(skillId: string): Promise<Session> {
     const res = await fetch(this.url("/sessions"), {
       method: "POST",
@@ -105,43 +149,62 @@ export class Api {
     return this.handle(res);
   }
 
-  /** Push-to-talk turn: the clip carries the user's voice; transcript is optional. */
-  async turn(
-    sessionId: string,
-    opts: { transcript?: string; clipUri?: string; photoUri?: string },
-  ): Promise<{ reply: string; current_step: number }> {
+  /** Push-to-talk turn: the clip carries the user's voice; the transcript is what the live
+   *  transcription heard (the backend transcribes the clip itself when it is empty). */
+  async turn(sessionId: string, opts: { transcript?: string; clipUri?: string; photoUri?: string }): Promise<TurnResponse> {
     const form = new FormData();
     form.append("transcript", opts.transcript ?? "");
-    if (opts.clipUri) {
-      form.append("clip", { uri: opts.clipUri, name: "clip.mp4", type: "video/mp4" } as any);
-    }
-    if (opts.photoUri) {
-      form.append("photo", { uri: opts.photoUri, name: "photo.jpg", type: "image/jpeg" } as any);
-    }
-    const res = await fetch(this.url(`/sessions/${sessionId}/turn`), {
-      method: "POST",
-      headers: this.headers(),
-      body: form,
-    });
+    if (opts.clipUri) form.append("clip", { uri: opts.clipUri, name: "clip.mp4", type: "video/mp4" } as any);
+    if (opts.photoUri) form.append("photo", { uri: opts.photoUri, name: "photo.jpg", type: "image/jpeg" } as any);
+    const res = await fetch(this.url(`/sessions/${sessionId}/turn`), { method: "POST", headers: this.headers(), body: form });
     return this.handle(res);
   }
 
   async verify(sessionId: string, photoUri: string): Promise<VerifyResponse> {
     const form = new FormData();
     form.append("photo", { uri: photoUri, name: "photo.jpg", type: "image/jpeg" } as any);
-    const res = await fetch(this.url(`/sessions/${sessionId}/verify`), {
-      method: "POST",
-      headers: this.headers(),
-      body: form,
-    });
+    const res = await fetch(this.url(`/sessions/${sessionId}/verify`), { method: "POST", headers: this.headers(), body: form });
+    return this.handle(res);
+  }
+
+  async highlight(sessionId: string, photoUri: string, concept = ""): Promise<Highlight | null> {
+    const form = new FormData();
+    form.append("photo", { uri: photoUri, name: "photo.jpg", type: "image/jpeg" } as any);
+    form.append("concept", concept);
+    const res = await fetch(this.url(`/sessions/${sessionId}/highlight`), { method: "POST", headers: this.headers(), body: form });
     return this.handle(res);
   }
 
   async skip(sessionId: string): Promise<Session> {
-    const res = await fetch(this.url(`/sessions/${sessionId}/skip`), {
-      method: "POST",
-      headers: this.headers(),
+    const res = await fetch(this.url(`/sessions/${sessionId}/skip`), { method: "POST", headers: this.headers() });
+    return this.handle(res);
+  }
+
+  /** Transcribe a dictated note (wav or mp4) with the batch endpoint. */
+  async authorTranscribe(uri: string, keywords: string[] = []): Promise<string> {
+    const form = new FormData();
+    const isWav = uri.toLowerCase().endsWith(".wav");
+    form.append("clip", { uri, name: isWav ? "note.wav" : "note.mp4", type: isWav ? "audio/wav" : "video/mp4" } as any);
+    form.append("keywords", keywords.join(", "));
+    const res = await fetch(this.url("/author/transcribe"), { method: "POST", headers: this.headers(), body: form });
+    const body = await this.handle<{ transcript: string }>(res);
+    return body.transcript;
+  }
+
+  /** Photos in order with one note each -> a published skill. */
+  async compile(captures: Capture[], author: string, titleHint: string): Promise<Skill> {
+    const form = new FormData();
+    form.append("author", author);
+    form.append("title_hint", titleHint);
+    // Keep notes and photos index-aligned: a capture without a photo still gets its note slot.
+    const withPhoto = captures.filter((c) => c.photoUri);
+    const withoutPhoto = captures.filter((c) => !c.photoUri);
+    withPhoto.forEach((c, i) => {
+      form.append("photos", { uri: c.photoUri, name: `photo_${i + 1}.jpg`, type: "image/jpeg" } as any);
+      form.append("notes", c.note);
     });
+    withoutPhoto.forEach((c) => form.append("notes", c.note));
+    const res = await fetch(this.url("/skills/compile"), { method: "POST", headers: this.headers(), body: form });
     return this.handle(res);
   }
 }

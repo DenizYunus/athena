@@ -19,6 +19,9 @@ class Settings:
     guide_model: str
     verify_model: str
     sam_model: str
+    asr_model: str
+    compile_model: str
+    ffmpeg_bin: str
     skills_dir: Path
     # Inline media limit on the Meta Model API is 50 MB; stay under it with margin.
     inline_media_limit_bytes: int = 45 * 1024 * 1024
@@ -33,6 +36,9 @@ def load_settings() -> Settings:
         guide_model=os.environ.get("GUIDE_MODEL", "muse-spark-1.3"),
         verify_model=os.environ.get("VERIFY_MODEL", "muse-spark-1.3"),
         sam_model=os.environ.get("SAM_MODEL", "sam-3.1"),
+        asr_model=os.environ.get("ASR_MODEL", "muse-voice-transcribe-1.0"),
+        compile_model=os.environ.get("COMPILE_MODEL", "muse-spark-1.3"),
+        ffmpeg_bin=os.environ.get("FFMPEG", "ffmpeg"),
         skills_dir=Path(os.environ.get("SKILLS_DIR", BACKEND_DIR / "skills")),
     )
 

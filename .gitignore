@@ -31,3 +31,6 @@ mobile/dist/
 
 # Local media captured during testing
 backend/.local/
+
+# Skills compiled at runtime (with the author's photos)
+backend/skills/compiled/
