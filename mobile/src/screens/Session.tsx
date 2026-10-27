@@ -1,20 +1,19 @@
 // Push-to-talk session over the live camera feed.
-// Tap the big button: record video + mic, and stream the mic to Voice Transcribe so the
-// words appear while you talk. Tap again: the clip and the transcript go to the guide.
-// The reply shows as a bubble and is spoken. The check button takes one photo and runs
-// the strict verification; SAM 3.1 marks the part on a fail or unclear verdict.
-import { useAudioStream } from "expo-audio";
+// Tap the big button: record video + mic. Tap again: the clip goes to the backend, which
+// pulls the audio track, transcribes it (Voice Transcribe, biased to the skill's vocabulary)
+// and only then asks the guide. The transcript lands in your bubble first; the reply streams
+// into the guide's bubble and is spoken. The check button takes one photo and runs the strict
+// verification; SAM 3.1 marks the part on the photo when it finds it.
 import { CameraView, useCameraPermissions, useMicrophonePermissions } from "expo-camera";
 import * as Speech from "expo-speech";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { Api, Highlight, Session, Skill, Verdict } from "../api";
 import { HighlightOverlay } from "../HighlightOverlay";
-import { LiveTranscript } from "../live";
 import { colors } from "../theme";
 import { GhostButton, PrimaryButton } from "../ui";
 
-type Bubble = { id: number; who: "user" | "guide"; text: string; tone?: "pass" | "fail" | "unclear" | "gate" };
+type Bubble = { id: number; who: "user" | "guide"; text: string; tone?: "pass" | "fail" | "unclear" | "gate"; pending?: boolean };
 type Phase = "idle" | "recording" | "sending" | "checking" | "speaking";
 
 const BUBBLE_OPACITY = [1, 0.9, 0.7, 0.5, 0.3, 0.15];
@@ -29,27 +28,22 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [seconds, setSeconds] = useState(0);
   const [showSteps, setShowSteps] = useState(false);
-  const [liveText, setLiveText] = useState("");
-  const [liveState, setLiveState] = useState<"off" | "on" | "failed">("off");
+  const [stage, setStage] = useState<"" | "uploading" | "transcribing" | "thinking">("");
   const [overlay, setOverlay] = useState<{ photoUri: string; highlight: Highlight; color: string; caption: string } | null>(null);
   const nextId = useRef(1);
   const recordingPromise = useRef<Promise<{ uri: string } | undefined> | null>(null);
-  const live = useRef<LiveTranscript | null>(null);
-  const liveDisabled = useRef(false); // set when the mic stream and the video recorder cannot share the mic
 
   const step = useMemo(() => skill.steps.find((st) => st.n === session.current_step) ?? skill.steps[0], [skill, session.current_step]);
   const total = skill.steps.length;
 
-  // Raw PCM from the mic while recording, forwarded to the transcription relay.
-  const { stream: mic } = useAudioStream({
-    sampleRate: 16000,
-    channels: 1,
-    encoding: "int16",
-    onBuffer: (buf) => live.current?.push(buf.data, buf.sampleRate, buf.channels),
-  });
+  const push = useCallback((b: Omit<Bubble, "id">): number => {
+    const id = nextId.current++;
+    setBubbles((prev) => [...prev, { ...b, id }].slice(-8));
+    return id;
+  }, []);
 
-  const push = useCallback((b: Omit<Bubble, "id">) => {
-    setBubbles((prev) => [...prev, { ...b, id: nextId.current++ }].slice(-8));
+  const update = useCallback((id: number, patch: Partial<Bubble>) => {
+    setBubbles((prev) => prev.map((b) => (b.id === id ? { ...b, ...patch } : b)));
   }, []);
 
   const say = useCallback((text: string) => {
@@ -85,16 +79,6 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
   }, [session.current_step]);
 
   useEffect(() => {
-    return () => {
-      live.current?.close();
-      try {
-        mic.stop();
-      } catch {}
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
     if (phase !== "recording") {
       setSeconds(0);
       return;
@@ -108,37 +92,6 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
     phaseRef.current = phase;
   }, [phase]);
 
-  async function startLive() {
-    if (liveDisabled.current) return;
-    const lt = new LiveTranscript(api.asrUrl(), skill.id, api.apiKey, {
-      onPartial: (t) => setLiveText(t),
-      onError: () => setLiveState("failed"),
-    });
-    live.current = lt;
-    setLiveText("");
-    setLiveState("on");
-    lt.open(); // not awaited: audio is buffered until the relay is ready
-    try {
-      await mic.start();
-    } catch {
-      setLiveState("failed");
-      lt.close();
-      live.current = null;
-    }
-  }
-
-  async function stopLive(): Promise<string> {
-    try {
-      mic.stop();
-    } catch {}
-    const lt = live.current;
-    live.current = null;
-    if (!lt) return "";
-    const text = await lt.finish();
-    lt.close();
-    return text;
-  }
-
   async function onTapRecord() {
     if (!camera.current) return;
     if (phase === "idle" || phase === "speaking") {
@@ -149,30 +102,19 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
         await wait(400);
       }
       setPhase("recording");
-      await startLive();
       try {
         recordingPromise.current = camera.current.recordAsync({ maxDuration: 20 });
-      } catch (e) {
-        // The video recorder could not open the mic while the live stream holds it: give up on live.
-        await stopLive();
-        liveDisabled.current = true;
-        setLiveState("failed");
-        recordingPromise.current = camera.current.recordAsync({ maxDuration: 20 });
+      } catch (e: any) {
+        push({ who: "guide", text: friendly(e), tone: "fail" });
+        setPhase("idle");
+        return;
       }
       recordingPromise.current
         .then((r) => {
           if (r?.uri && phaseRef.current === "recording") sendClip(r.uri);
-          else if (!r?.uri) {
-            stopLive();
-            setPhase("idle");
-          }
+          else if (!r?.uri) setPhase("idle");
         })
-        .catch(async (e) => {
-          await stopLive();
-          if (!liveDisabled.current && live.current === null && liveState !== "failed") {
-            // first failure with the live stream on: remember and let the user try again
-            liveDisabled.current = true;
-          }
+        .catch((e) => {
           push({ who: "guide", text: friendly(e), tone: "fail" });
           setPhase("idle");
         });
@@ -185,20 +127,38 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
 
   async function sendClip(uri: string) {
     setPhase("sending");
-    const heard = await stopLive();
+    setStage("uploading");
     const secs = Math.max(seconds, 1);
-    const userLine = heard ? heard : `Clip sent · ${secs} s · transcribing your words…`;
-    const userId = nextId.current++;
-    setBubbles((prev) => [...prev, { id: userId, who: "user" as const, text: userLine }].slice(-8));
-    setLiveText("");
+    const userId = push({ who: "user", text: `Clip · ${secs} s · sending…`, pending: true });
+    let guideId: number | null = null;
     try {
-      const res = await api.turn(session.id, { clipUri: uri, transcript: heard });
-      if (!heard && res.transcript) {
-        setBubbles((prev) => prev.map((b) => (b.id === userId ? { ...b, text: res.transcript } : b)));
-      }
-      push({ who: "guide", text: res.reply });
+      const res = await api.turnStream(
+        session.id,
+        { clipUri: uri },
+        {
+          transcribing: () => {
+            setStage("transcribing");
+            update(userId, { text: `Clip · ${secs} s · transcribing your words…` });
+          },
+          transcript: (text) => {
+            setStage("thinking");
+            update(userId, { text: text || `Clip · ${secs} s · no words heard, the guide looks at the video`, pending: false });
+          },
+          delta: (_d, reply) => {
+            if (guideId === null) guideId = push({ who: "guide", text: reply, pending: true });
+            else update(guideId, { text: reply });
+          },
+        },
+      );
+      if (guideId === null) guideId = push({ who: "guide", text: res.reply });
+      update(guideId, { text: res.reply, pending: false });
+      update(userId, { pending: false });
+      setStage("");
       say(res.reply);
     } catch (e: any) {
+      setStage("");
+      update(userId, { pending: false });
+      if (guideId !== null) update(guideId, { pending: false });
       push({ who: "guide", text: friendly(e), tone: "fail" });
       setPhase("idle");
     }
@@ -252,6 +212,8 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
     }
   }
 
+  const dismissOverlay = useCallback(() => setOverlay(null), []);
+
   if (!camPerm?.granted) {
     return (
       <View style={s.center}>
@@ -263,7 +225,6 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
   }
 
   const visible = bubbles.slice(-BUBBLE_OPACITY.length);
-  const dismissOverlay = useCallback(() => setOverlay(null), []);
 
   return (
     <View style={s.root}>
@@ -279,7 +240,7 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
         {phase === "recording" ? (
           <View style={[s.pill, { borderColor: colors.fail }]}>
             <View style={[s.dot, { backgroundColor: colors.fail }]} />
-            <Text style={[s.pillText, { color: colors.fail }]}>REC {fmt(seconds)}</Text>
+            <Text style={[s.pillText, { color: colors.fail }]}>REC {fmt(seconds)} · video + voice</Text>
           </View>
         ) : (
           <View style={s.pill}>
@@ -307,21 +268,18 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
           const opacity = BUBBLE_OPACITY[fromBottom] ?? 0;
           const tone = b.tone ? toneColor(b.tone) : undefined;
           return (
-            <View key={b.id} style={[s.bubble, b.who === "user" ? s.bubbleUser : s.bubbleGuide, tone ? { borderColor: tone, borderWidth: 1 } : null, { opacity }]}>
-              <Text style={[s.bubbleText, b.who === "guide" && { color: colors.text2 }, tone ? { color: colors.text } : null]}>{b.text}</Text>
+            <View
+              key={b.id}
+              style={[s.bubble, b.who === "user" ? s.bubbleUser : s.bubbleGuide, tone ? { borderColor: tone, borderWidth: 1 } : null, b.pending ? s.bubblePending : null, { opacity }]}
+            >
+              <Text style={[s.bubbleText, b.who === "guide" && { color: colors.text2 }, tone ? { color: colors.text } : null, b.pending ? { color: colors.muted } : null]}>{b.text}</Text>
             </View>
           );
         })}
-        {phase === "recording" ? (
-          <View style={[s.bubble, s.bubbleUser, s.bubbleLive]}>
-            <Text style={s.liveLabel}>{liveState === "failed" ? "LISTENING (transcript after you send)" : "LISTENING"}</Text>
-            <Text style={s.bubbleText}>{liveText || (liveState === "failed" ? "Your words are transcribed from the clip." : "…")}</Text>
-          </View>
-        ) : null}
       </View>
 
       <View style={s.controls}>
-        <Text style={s.hint}>{hintFor(phase, session.completed)}</Text>
+        <Text style={s.hint}>{hintFor(phase, stage, session.completed)}</Text>
         <View style={s.controlRow}>
           <Pressable onPress={() => setShowSteps(true)} style={s.sideBtn} accessibilityLabel="Show steps">
             <Text style={s.sideBtnText}>Steps</Text>
@@ -402,7 +360,7 @@ function verdictSpeech(v: Verdict): string {
   return v.reason;
 }
 
-function hintFor(phase: Phase, completed: boolean) {
+function hintFor(phase: Phase, stage: "" | "uploading" | "transcribing" | "thinking", completed: boolean) {
   if (completed) return "All steps verified";
   switch (phase) {
     case "idle":
@@ -410,7 +368,7 @@ function hintFor(phase: Phase, completed: boolean) {
     case "recording":
       return "Recording video + voice · tap to send";
     case "sending":
-      return "Clip sent to the guide…";
+      return stage === "transcribing" ? "Transcribing what you said…" : stage === "thinking" ? "The guide is looking at your clip…" : "Sending the clip…";
     case "checking":
       return "Checking this step from a photo…";
     case "speaking":
@@ -442,8 +400,7 @@ const s = StyleSheet.create({
   bubble: { maxWidth: 300, paddingVertical: 9, paddingHorizontal: 13, borderRadius: 16 },
   bubbleGuide: { alignSelf: "flex-start", backgroundColor: "rgba(26,29,35,0.92)", borderBottomLeftRadius: 4 },
   bubbleUser: { alignSelf: "flex-end", backgroundColor: "rgba(42,47,56,0.95)", borderBottomRightRadius: 4 },
-  bubbleLive: { borderWidth: 1, borderColor: colors.amber, minWidth: 180 },
-  liveLabel: { color: colors.amber, fontSize: 10, fontWeight: "700", letterSpacing: 0.6, marginBottom: 2 },
+  bubblePending: { borderWidth: 1, borderColor: "rgba(245,184,46,0.6)", borderStyle: "dashed" },
   bubbleText: { color: colors.text, fontSize: 14, lineHeight: 19 },
   controls: { position: "absolute", left: 0, right: 0, bottom: 0, height: 150, paddingHorizontal: 20, paddingBottom: 26, justifyContent: "flex-end", alignItems: "center", gap: 10 },
   hint: { color: colors.text, fontSize: 13, fontWeight: "500", textShadowColor: "rgba(0,0,0,0.8)", textShadowRadius: 3 },

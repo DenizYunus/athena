@@ -160,6 +160,93 @@ export class Api {
     return this.handle(res);
   }
 
+  /** Streamed push-to-talk turn. The backend transcribes the clip's audio first, then asks the guide.
+   *  Events arrive in order: transcribing, transcript, delta..., done (or error). Uses XMLHttpRequest
+   *  because React Native's fetch cannot read a response body incrementally; if the runtime delivers
+   *  no incremental progress events, everything is parsed when the response completes. */
+  turnStream(
+    sessionId: string,
+    opts: { transcript?: string; clipUri?: string; photoUri?: string },
+    on: { transcribing?: () => void; transcript?: (text: string) => void; delta?: (delta: string, reply: string) => void } = {},
+  ): Promise<TurnResponse> {
+    const form = new FormData();
+    form.append("transcript", opts.transcript ?? "");
+    if (opts.clipUri) form.append("clip", { uri: opts.clipUri, name: "clip.mp4", type: "video/mp4" } as any);
+    if (opts.photoUri) form.append("photo", { uri: opts.photoUri, name: "photo.jpg", type: "image/jpeg" } as any);
+    const url = this.url(`/sessions/${sessionId}/turn?stream=true`);
+    const headers = this.headers({ Accept: "text/event-stream" });
+
+    return new Promise<TurnResponse>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      let seen = 0;
+      let transcript = "";
+      let reply = "";
+      let step = 0;
+      let done = false;
+      let failed: string | null = null;
+
+      const consume = () => {
+        let text: string;
+        try {
+          text = xhr.responseText || "";
+        } catch {
+          return;
+        }
+        let idx: number;
+        while ((idx = text.indexOf("\n\n", seen)) !== -1) {
+          const block = text.slice(seen, idx);
+          seen = idx + 2;
+          for (const line of block.split("\n")) {
+            if (!line.startsWith("data:")) continue;
+            let payload: any;
+            try {
+              payload = JSON.parse(line.slice(5).trim());
+            } catch {
+              continue;
+            }
+            if (payload.transcribing) on.transcribing?.();
+            if (typeof payload.transcript === "string") {
+              transcript = payload.transcript;
+              on.transcript?.(transcript);
+            }
+            if (typeof payload.delta === "string") {
+              reply += payload.delta;
+              on.delta?.(payload.delta, reply);
+            }
+            if (payload.error) failed = String(payload.error);
+            if (payload.done) {
+              done = true;
+              step = payload.current_step ?? 0;
+            }
+          }
+        }
+      };
+
+      xhr.open("POST", url);
+      for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+      xhr.onprogress = consume;
+      xhr.onerror = () => reject(new ApiError("Network request failed"));
+      xhr.ontimeout = () => reject(new ApiError("The guide took too long to answer"));
+      xhr.timeout = 120000;
+      xhr.onreadystatechange = () => {
+        if (xhr.readyState !== 4) return;
+        if (xhr.status !== 200) {
+          let detail = xhr.statusText || `HTTP ${xhr.status}`;
+          try {
+            detail = JSON.parse(xhr.responseText).detail ?? detail;
+          } catch {}
+          reject(new ApiError(`${xhr.status}: ${detail}`, xhr.status));
+          return;
+        }
+        consume();
+        if (failed) reject(new ApiError(failed));
+        else if (!done) reject(new ApiError(reply ? "The reply was cut off" : "The guide did not answer"));
+        else resolve({ reply: reply.trim(), transcript, current_step: step });
+      };
+      xhr.send(form as any);
+    });
+  }
+
   async verify(sessionId: string, photoUri: string): Promise<VerifyResponse> {
     const form = new FormData();
     form.append("photo", { uri: photoUri, name: "photo.jpg", type: "image/jpeg" } as any);
