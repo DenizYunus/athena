@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lens card: step</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700&amp;display=swap">
+<style>
+body{margin:0;font-family:Inter,system-ui,sans-serif;background:#000;color:#fff}
+a{color:#F5B82E}a:hover{color:#FFD166}
+</style>
+</helmet>
+<div style="width: 600px; height: 600px; box-sizing: border-box; background: #000000; color: #FFFFFF; font-family: Inter, system-ui, sans-serif; padding: 48px; display: flex; flex-direction: column; justify-content: space-between; position: relative">
+  <div style="display: flex; align-items: center; justify-content: space-between">
+    <span style="font-size: 24px; font-weight: 600; color: #B8BDC7; letter-spacing: 0.5px">STEP 4 OF 7</span>
+    <span style="display: flex; gap: 8px" aria-label="Progress: 3 of 7 steps verified">
+      <span style="width: 34px; height: 8px; border-radius: 4px; background: #2DD4BF"></span><span style="width: 34px; height: 8px; border-radius: 4px; background: #2DD4BF"></span><span style="width: 34px; height: 8px; border-radius: 4px; background: #2DD4BF"></span><span style="width: 34px; height: 8px; border-radius: 4px; background: #F5B82E"></span><span style="width: 34px; height: 8px; border-radius: 4px; background: #3A3F49"></span><span style="width: 34px; height: 8px; border-radius: 4px; background: #3A3F49"></span><span style="width: 34px; height: 8px; border-radius: 4px; background: #3A3F49"></span>
+    </span>
+  </div>
+
+  <div style="display: flex; gap: 28px; align-items: center">
+    <div style="flex: 1; display: flex; flex-direction: column; gap: 16px">
+      <div style="font-size: 42px; line-height: 1.12; font-weight: 700; letter-spacing: -0.6px">Pull the relay straight off the pins</div>
+      <div style="font-size: 26px; line-height: 1.3; font-weight: 500; color: #F5B82E">Don't twist. Grip the body, not the wires.</div>
+    </div>
+    <div style="width: 170px; height: 170px; border-radius: 16px; background: #15181D; border: 2px solid #3A3F49; flex-shrink: 0; display: flex; align-items: center; justify-content: center; position: relative">
+      <svg width="130" height="100" viewBox="0 0 130 100" role="img" aria-label="Reference: relay pulled straight off"><rect x="44" y="28" width="56" height="42" rx="6" fill="#2B303A" stroke="#C9CED8" stroke-width="2"/><path d="M108 49h16" stroke="#C9CED8" stroke-width="2"/><path d="M36 49H12" stroke="#2DD4BF" stroke-width="4" stroke-linecap="round"/><path d="M20 39 10 49l10 10" fill="none" stroke="#2DD4BF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span style="position: absolute; bottom: 8px; left: 0; right: 0; text-align: center; font-size: 16px; font-weight: 600; color: #B8BDC7">Marco's photo</span>
+    </div>
+  </div>
+
+  <div style="display: flex; align-items: center; justify-content: space-between">
+    <span style="display: flex; align-items: center; gap: 12px; font-size: 24px; font-weight: 600; color: #2DD4BF"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg>Say "done" to check</span>
+    <span style="font-size: 22px; font-weight: 600; color: #B8BDC7">"repeat" · "help"</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":600,"height":600}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

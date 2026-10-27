@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mode B: snapshot check</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;font-family:Inter,system-ui,sans-serif;background:#0F1115;color:#F3F4F6}
+a{color:#F5B82E}a:hover{color:#FFD166}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #0F1115; color: #F3F4F6; font-family: Inter, system-ui, sans-serif; display: flex; flex-direction: column; overflow: hidden; position: relative">
+
+  <div style="height: 460px; background: #22262E; position: relative; overflow: hidden">
+    <svg width="390" height="460" viewBox="0 0 390 460" role="img" aria-label="Frozen capture: relay removed, three pins exposed" style="display: block">
+      <rect width="390" height="460" fill="#22262E"/>
+      <circle cx="130" cy="280" r="100" fill="#2B303A" stroke="#C9CED8" stroke-width="2"/>
+      <circle cx="238" cy="252" r="6" fill="#F5B82E"/><circle cx="262" cy="252" r="6" fill="#F5B82E"/><circle cx="250" cy="280" r="6" fill="#F5B82E"/>
+      <rect x="338" y="236" width="46" height="44" rx="6" fill="#2B303A" stroke="#C9CED8" stroke-width="2"/>
+      <rect x="40" y="60" width="110" height="80" rx="8" fill="#2B303A" stroke="#C9CED8" stroke-width="2"/>
+      <text x="95" y="160" fill="#A3A9B5" font-family="Inter, system-ui" font-size="12" text-anchor="middle">old relay, out</text>
+      <rect x="0" y="0" width="390" height="460" fill="rgba(15,17,21,0.35)"/>
+    </svg>
+    <div style="position: absolute; top: 54px; left: 16px; right: 16px; display: flex; align-items: center; justify-content: space-between">
+      <a href="SkillDetail.dc.html" aria-label="Exit session" style="width: 44px; height: 44px; border-radius: 22px; background: rgba(15,17,21,0.8); color: #F3F4F6; display: flex; align-items: center; justify-content: center; text-decoration: none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></a>
+      <span style="height: 32px; padding: 0 12px; border-radius: 16px; background: rgba(15,17,21,0.85); color: #F3F4F6; font-size: 13px; font-weight: 600; display: flex; align-items: center">Step 4 of 7</span>
+      <span style="height: 32px; padding: 0 10px; border-radius: 16px; background: rgba(15,17,21,0.85); color: #A3A9B5; font-size: 12px; font-weight: 500; display: flex; align-items: center">Captured</span>
+    </div>
+    <div style="position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 18px 22px; border-radius: 18px; background: rgba(15,17,21,0.92); border: 1px solid #2A2F38; min-width: 230px">
+      <span style="width: 44px; height: 44px; border-radius: 22px; border: 3px solid #2A2F38; border-top-color: #F5B82E; box-sizing: border-box" aria-hidden="true"></span>
+      <span style="font-size: 15px; font-weight: 700">Checking step 4…</span>
+      <span style="font-size: 12px; color: #A3A9B5; text-align: center; line-height: 1.4">Comparing your photo with Marco's reference</span>
+    </div>
+    <div style="position: absolute; right: 16px; bottom: 14px; display: flex; gap: 6px">
+      <span style="width: 54px; height: 54px; border-radius: 10px; background: #22262E; border: 2px solid #2DD4BF; box-sizing: border-box; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #2DD4BF; font-weight: 700">ref</span>
+      <span style="width: 54px; height: 54px; border-radius: 10px; background: #22262E; border: 2px solid #F5B82E; box-sizing: border-box; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #F5B82E; font-weight: 700">yours</span>
+    </div>
+  </div>
+
+  <div style="flex: 1; padding: 16px 20px 0 20px; display: flex; flex-direction: column; gap: 12px">
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <h1 style="margin: 0; font-size: 19px; font-weight: 700; line-height: 1.2; letter-spacing: -0.3px">Pull the old relay straight off the pins</h1>
+      <p style="margin: 0; font-size: 14px; line-height: 1.4; color: #C9CED8">Do the step, then take one photo. I only look when you ask me to.</p>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 12px; background: #1A1D23; border: 1px solid #2A2F38">
+      <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #A3A9B5"><span style="width: 18px; height: 18px; border-radius: 9px; background: #60A5FA; display: flex; align-items: center; justify-content: center"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#0F1115" stroke-width="3" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></span>Check 1 · 2 min ago · unclear, asked for a photo from below</div>
+      <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #F3F4F6"><span style="width: 18px; height: 18px; border-radius: 9px; border: 2px solid #F5B82E; box-sizing: border-box"></span>Check 2 · now · in progress</div>
+    </div>
+  </div>
+
+  <div style="padding: 10px 20px 26px 20px; display: flex; align-items: center; justify-content: space-between">
+    <a href="StepPass.dc.html" style="width: 60px; height: 60px; border-radius: 30px; background: #1A1D23; border: 1px solid #2A2F38; color: #F3F4F6; font-size: 11px; font-weight: 600; display: flex; align-items: center; justify-content: center; text-decoration: none">Retake</a>
+    <button disabled aria-label="Checking, please wait" style="width: 80px; height: 80px; border-radius: 40px; background: #3A3320; border: 5px solid #2A2F38; box-sizing: border-box; display: flex; align-items: center; justify-content: center"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#8A7A4A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4Z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
+    <a href="ModePTT.dc.html" aria-label="Ask a question instead" style="width: 60px; height: 60px; border-radius: 30px; background: #1A1D23; border: 1px solid #2A2F38; color: #2DD4BF; display: flex; align-items: center; justify-content: center; text-decoration: none"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg></a>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
