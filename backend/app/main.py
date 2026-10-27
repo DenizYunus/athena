@@ -192,23 +192,39 @@ async def session_turn(
         raise HTTPException(422, "send a transcript, a clip, or a photo")
 
     transcript = transcript.strip()
-    if not transcript and clip_bytes:
+
+    async def words() -> str:
+        """The transcript to use: as sent, else transcribed from the clip's audio track."""
+        if transcript or not clip_bytes:
+            return transcript
         try:
-            transcript = await asr.transcribe_clip(client.api_key, clip_bytes, skill.vocabulary)
+            return await asr.transcribe_clip(client.api_key, clip_bytes, skill.vocabulary)
         except RuntimeError:
-            transcript = ""  # the guide still gets the clip; the model can hear the audio track
+            return ""  # the guide still gets the clip; the model can hear the audio track
 
     if stream:
+        # Events, in order: transcribing (only when the clip's audio is being transcribed),
+        # transcript, delta..., done. An error event replaces done if the guide call fails.
         async def sse() -> AsyncIterator[bytes]:
-            yield f"data: {json.dumps({'transcript': transcript})}\n\n".encode()
-            async for delta in guide.turn_stream(client, skill, session, transcript, clip_bytes, photo_bytes):
-                yield f"data: {json.dumps({'delta': delta})}\n\n".encode()
-            yield f"data: {json.dumps({'done': True, 'current_step': session.current_step})}\n\n".encode()
+            def event(payload: dict) -> bytes:
+                return f"data: {json.dumps(payload)}\n\n".encode()
 
-        return StreamingResponse(sse(), media_type="text/event-stream")
+            try:
+                if not transcript and clip_bytes:
+                    yield event({"transcribing": True})
+                heard = await words()
+                yield event({"transcript": heard})
+                async for delta in guide.turn_stream(client, skill, session, heard, clip_bytes, photo_bytes):
+                    yield event({"delta": delta})
+                yield event({"done": True, "current_step": session.current_step})
+            except Exception as exc:  # the phone shows this in a bubble
+                yield event({"error": str(exc)[:300]})
 
-    reply = await guide.turn(client, skill, session, transcript, clip_bytes, photo_bytes)
-    return TurnResponse(reply=reply, transcript=transcript, current_step=session.current_step, session_id=session.id)
+        return StreamingResponse(sse(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    heard = await words()
+    reply = await guide.turn(client, skill, session, heard, clip_bytes, photo_bytes)
+    return TurnResponse(reply=reply, transcript=heard, current_step=session.current_step, session_id=session.id)
 
 
 @app.post("/sessions/{session_id}/verify", response_model=VerifyResponse)

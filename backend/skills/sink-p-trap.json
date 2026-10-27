@@ -1,0 +1,141 @@
+{
+  "id": "sink-p-trap",
+  "title": "Unclog a bathroom sink by cleaning the P-trap",
+  "domain": "plumbing",
+  "author": "Lena K.",
+  "difficulty": 1,
+  "est_minutes": 15,
+  "price_usd": 4,
+  "tools": [
+    "bucket",
+    "towel",
+    "old toothbrush or bottle brush",
+    "slip-joint pliers (only if a nut is stuck)"
+  ],
+  "parts": [],
+  "vocabulary": [
+    "P-trap",
+    "slip nut",
+    "slip-joint washer",
+    "tailpiece",
+    "trap arm",
+    "wall stub",
+    "pop-up stopper",
+    "drain",
+    "U-bend",
+    "beveled washer"
+  ],
+  "steps": [
+    {
+      "n": 1,
+      "instruction": "Clear everything out from under the sink and put an empty bucket directly under the U-shaped trap. Keep a towel next to it.",
+      "expected_state": "An empty bucket sits directly beneath the curved P-trap, with the trap and the bucket in the same frame and nothing else stored under the sink.",
+      "reference_image": "media/sink-p-trap/bucket-under-trap.jpg",
+      "sam_concepts": [
+        "bucket",
+        "curved white pipe",
+        "white plastic pipe"
+      ],
+      "verify_hints": "Reject if no bucket is visible under the bend, or if the bucket is off to the side. A towel alone does not count. Bottles and cleaning products still in the cabinet are a fail.",
+      "common_mistakes": [
+        "Loosening the nuts before the bucket is in place",
+        "Bucket too far to one side of the trap"
+      ],
+      "safety_gate": true,
+      "gate_requirement": "Bucket positioned directly under the P-trap and the cabinet cleared, before any nut is touched.",
+      "est_minutes": 2
+    },
+    {
+      "n": 2,
+      "instruction": "Loosen the two slip nuts on the trap by hand, turning them counterclockwise. If one will not budge, wrap it in the towel and use the pliers gently.",
+      "expected_state": "Both slip nuts are loosened and backed away from the trap joints, with the trap still hanging in place.",
+      "reference_image": null,
+      "sam_concepts": [
+        "white plastic nut",
+        "white plastic ring",
+        "curved white pipe"
+      ],
+      "verify_hints": "Both nuts must visibly have moved away from the joints. If only one is loose, fail and say which one. A nut still tight against the joint is a fail.",
+      "common_mistakes": [
+        "Turning clockwise and tightening instead",
+        "Using bare pliers on plastic and cracking the nut"
+      ],
+      "safety_gate": false,
+      "est_minutes": 3
+    },
+    {
+      "n": 3,
+      "instruction": "Pull the trap down and off, and tip it into the bucket. Pull out the hair and gunk with your fingers or the brush.",
+      "expected_state": "The P-trap is detached and held over or sitting in the bucket; the open ends of the tailpiece above and the trap arm from the wall are visible.",
+      "reference_image": "media/sink-p-trap/trap-removed.jpg",
+      "sam_concepts": [
+        "curved white pipe",
+        "bucket",
+        "white plastic pipe"
+      ],
+      "verify_hints": "The trap must be fully separated from both pipes. If it is still attached on one side, fail. Ask for a photo from below if the joint is hidden by a hand.",
+      "common_mistakes": [
+        "Letting the washers fall into the bucket unnoticed",
+        "Tipping the trap out over the cabinet floor instead of the bucket"
+      ],
+      "safety_gate": false,
+      "est_minutes": 2
+    },
+    {
+      "n": 4,
+      "instruction": "Scrub the inside of the trap and the tailpiece with the brush. Then check both slip-joint washers for cracks and put them back with the tapered side facing the joint.",
+      "expected_state": "A clean trap interior with no hair or sludge, and two intact beveled washers sitting on the pipe ends.",
+      "reference_image": null,
+      "sam_concepts": [
+        "curved white pipe",
+        "brush",
+        "rubber ring"
+      ],
+      "verify_hints": "Look inside the trap: any visible clump of hair or sludge is a fail. Reject if a washer is missing or cracked. If the inside of the trap is not visible, ask for a photo looking straight into the opening.",
+      "common_mistakes": [
+        "Washer installed backwards",
+        "Forgetting the washer on the wall-side joint"
+      ],
+      "safety_gate": false,
+      "est_minutes": 4
+    },
+    {
+      "n": 5,
+      "instruction": "Slide the trap back onto the tailpiece and the trap arm, then hand-tighten both slip nuts clockwise. Snug, not forced.",
+      "expected_state": "The trap is reinstalled with both slip nuts threaded fully onto the joints, no gap at either joint, the trap hanging straight.",
+      "reference_image": null,
+      "sam_concepts": [
+        "white plastic nut",
+        "curved white pipe",
+        "white plastic pipe"
+      ],
+      "verify_hints": "Both nuts must be on the threads with no visible gap. If the trap sits crooked or a nut is cross-threaded at an angle, fail.",
+      "common_mistakes": [
+        "Cross-threading a nut",
+        "Overtightening with pliers and cracking the nut"
+      ],
+      "safety_gate": false,
+      "watch_me": true,
+      "est_minutes": 3
+    },
+    {
+      "n": 6,
+      "instruction": "Leave the bucket where it is and run the tap on full for a minute. Then press a dry paper towel or a dry finger under each slip nut and look for any wet mark.",
+      "expected_state": "The reinstalled trap with both slip nuts tight and both joints dry: no drip, no wet streak, no water on the towel or in the bucket, and the bucket still underneath.",
+      "reference_image": "media/sink-p-trap/trap-reinstalled-dry.jpg",
+      "sam_concepts": [
+        "white plastic nut",
+        "bucket",
+        "curved white pipe"
+      ],
+      "verify_hints": "Any drop, bead or wet streak on a joint, or water collecting in the bucket, is a fail: say which nut to tighten a quarter turn. If the joints are not clearly visible, ask for a close photo of each nut. Running water does not need to be visible; dry joints after the test do.",
+      "common_mistakes": [
+        "Checking only one joint",
+        "Removing the bucket before the test"
+      ],
+      "safety_gate": false,
+      "watch_me": true,
+      "est_minutes": 2
+    }
+  ]
+}

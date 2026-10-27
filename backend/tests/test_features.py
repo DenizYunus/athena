@@ -280,3 +280,70 @@ def test_seed_skill_reference_photo_resolves():
     block = image_block_from_source(skill.step(2).reference_image)
     assert block["image_url"].startswith("data:image/jpeg;base64,")
     assert all(s.sam_concepts for s in skill.steps)
+
+
+# ---------------------------------------------------------------- streamed turn, second skill
+
+
+def _sse_events(text: str) -> list[dict]:
+    return [json.loads(line[5:].strip()) for line in text.splitlines() if line.startswith("data:")]
+
+
+def test_turn_stream_sends_transcribing_then_transcript_then_reply(app_client, fake_client, monkeypatch):
+    from app import main
+
+    async def fake_transcribe(api_key, media, keywords=None):
+        return "is this the relay?"
+
+    monkeypatch.setattr(main.asr, "transcribe_clip", fake_transcribe)
+    sid = app_client.post("/sessions", json={"skill_id": "fridge-start-relay"}).json()["id"]
+    r = app_client.post(f"/sessions/{sid}/turn?stream=true", files={"clip": ("c.mp4", b"\x00" * 64, "video/mp4")})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
+    events = _sse_events(r.text)
+    assert events[0] == {"transcribing": True}
+    assert events[1] == {"transcript": "is this the relay?"}
+    assert "".join(e["delta"] for e in events[2:-1]) == "Yes, that's the relay. Grip the body."
+    assert events[-1] == {"done": True, "current_step": 1}
+    # the guide got the transcribed words, not an empty string
+    assert fake_client.calls[-1]["input"][-1]["content"][0]["text"] == "is this the relay?"
+
+
+def test_turn_stream_without_clip_skips_transcribing(app_client):
+    sid = app_client.post("/sessions", json={"skill_id": "fridge-start-relay"}).json()["id"]
+    r = app_client.post(f"/sessions/{sid}/turn?stream=true", data={"transcript": "hello"})
+    events = _sse_events(r.text)
+    assert events[0] == {"transcript": "hello"}
+    assert events[-1]["done"] is True
+
+
+def test_turn_stream_reports_guide_failure_as_event(app_client, monkeypatch):
+    from app import main
+
+    async def broken(*args, **kwargs):
+        yield "partial "
+        raise RuntimeError("Meta API stream failed: boom")
+
+    monkeypatch.setattr(main.guide, "turn_stream", broken)
+    sid = app_client.post("/sessions", json={"skill_id": "fridge-start-relay"}).json()["id"]
+    r = app_client.post(f"/sessions/{sid}/turn?stream=true", data={"transcript": "hello"})
+    events = _sse_events(r.text)
+    assert events[-1]["error"].startswith("Meta API stream failed")
+    assert not any("done" in e for e in events)
+
+
+def test_second_seed_skill_is_complete():
+    store = SkillStore()
+    ids = {s.id for s in store.list()}
+    assert {"fridge-start-relay", "sink-p-trap"} <= ids
+    sink = store.get("sink-p-trap")
+    assert sink.domain == "plumbing" and sink.step(1).safety_gate and sink.step(1).gate_requirement
+    assert [s.n for s in sink.steps] == list(range(1, len(sink.steps) + 1))
+    assert all(s.sam_concepts and s.expected_state for s in sink.steps)
+    from app.media import image_block_from_source
+
+    refs = [s.reference_image for s in sink.steps if s.reference_image]
+    assert len(refs) == 3
+    for ref in refs:
+        assert image_block_from_source(ref)["image_url"].startswith("data:image/jpeg;base64,")
+    # the two seed skills do not share a vocabulary: keyword bias is per skill
+    assert set(sink.vocabulary).isdisjoint(store.get("fridge-start-relay").vocabulary)
