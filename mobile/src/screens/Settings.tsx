@@ -24,7 +24,7 @@ export function SettingsScreen({ settings, onSaved, onBack }: { settings: Settin
       const h = await new Api(next).health();
       setStatus(
         `Backend OK · ${h.skills} skill(s) · ` +
-          (h.server_has_key ? "server has a key" : next.apiKey ? "using the key from this phone" : "no key anywhere yet"),
+          (h.server_has_key ? "server has a key" : next.apiKey ? "using the key from this phone" : "no key anywhere yet") + (h.ffmpeg ? "" : " · ffmpeg missing on the server (clip transcription off)"),
       );
     } catch (e: any) {
       setStatus(`Failed: ${e.message ?? e}`);

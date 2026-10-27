@@ -1,10 +1,10 @@
 import React, { useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
-import { Skill } from "../api";
+import { Image, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Api, Skill } from "../api";
 import { colors } from "../theme";
 import { Card, Chip, GhostButton, PrimaryButton } from "../ui";
 
-export function SkillDetailScreen({ skill, onStart, onBack }: { skill: Skill; onStart: () => Promise<void>; onBack: () => void }) {
+export function SkillDetailScreen({ api, skill, onStart, onBack }: { api: Api; skill: Skill; onStart: () => Promise<void>; onBack: () => void }) {
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
   const gates = skill.steps.filter((st) => st.safety_gate);
@@ -65,6 +65,7 @@ export function SkillDetailScreen({ skill, onStart, onBack }: { skill: Skill; on
           <View key={st.n} style={s.stepRow}>
             <Text style={s.stepN}>{st.n}</Text>
             <Text style={s.stepText}>{st.instruction}</Text>
+            {api.mediaUrl(skill.id, st.reference_image) ? <Image source={{ uri: api.mediaUrl(skill.id, st.reference_image)! }} style={{ width: 44, height: 44, borderRadius: 8, backgroundColor: colors.surface2 }} /> : null}
           </View>
         ))}
 

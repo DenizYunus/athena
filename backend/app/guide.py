@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 from .config import settings
@@ -92,10 +93,12 @@ async def turn(
     return "".join(parts).strip()
 
 
-async def verify(client: Any, skill: Skill, session: Session, photo: bytes) -> StepVerdict:
+async def verify(
+    client: Any, skill: Skill, session: Session, photo: bytes, media_dir: Path | None = None
+) -> StepVerdict:
     """One structured-output call. Does not mutate the session; the API layer decides what to do."""
     step = skill.step(session.current_step)
-    reference = image_block_from_source(step.reference_image) if step.reference_image else None
+    reference = image_block_from_source(step.reference_image, media_dir) if step.reference_image else None
     user_blocks = verify_user_blocks(reference, image_block(prepare_image(photo)))
 
     response = await client.responses.create(

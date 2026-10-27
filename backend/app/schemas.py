@@ -45,6 +45,7 @@ class Skill(BaseModel):
         description="Part names fed to Voice Transcribe as keyword bias.",
     )
     steps: list[Step]
+    compiled: bool = Field(default=False, description="Produced by the compiler at runtime (deletable), not a seed.")
 
     def step(self, n: int) -> Step:
         for s in self.steps:
@@ -136,8 +137,40 @@ class StartSessionRequest(BaseModel):
 
 class TurnResponse(BaseModel):
     reply: str
+    transcript: str = Field(default="", description="What the user said, as sent or as transcribed from the clip.")
     current_step: int
     session_id: str
+
+
+class Box(BaseModel):
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+
+
+class MaskShape(BaseModel):
+    """An SVG path in the mask's own coordinate space; translate by (left, top) inside the frame."""
+
+    left: float
+    top: float
+    width: float
+    height: float
+    path: str
+
+
+class HighlightObject(BaseModel):
+    id: int
+    box: Box
+    confidence: float
+    mask: MaskShape | None = None
+
+
+class Highlight(BaseModel):
+    concept: str
+    frame_width: int = Field(description="Pixel size of the frame the coordinates refer to (the resized photo).")
+    frame_height: int
+    objects: list[HighlightObject]
 
 
 class VerifyResponse(BaseModel):
@@ -146,3 +179,8 @@ class VerifyResponse(BaseModel):
     current_step: int
     completed: bool
     session_id: str
+    highlight: Highlight | None = Field(default=None, description="SAM 3.1 match for the step's part, when found.")
+
+
+class TranscriptResponse(BaseModel):
+    transcript: str
