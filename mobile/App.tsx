@@ -54,7 +54,7 @@ export default function App() {
       screen = <SkillDetailScreen api={api} skill={route.skill} onBack={() => setRoute({ name: "market" })} onStart={() => startSession(route.skill)} />;
       break;
     case "session":
-      screen = <SessionScreen api={api} skill={route.skill} session={route.session} onExit={() => setRoute({ name: "market" })} />;
+      screen = <SessionScreen api={api} skill={route.skill} session={route.session} onExit={() => setRoute({ name: "market" })} glassesMock={settings.glassesMock} />;
       break;
     case "author":
       screen = <AuthorCaptureScreen api={api} onCompiled={(skill) => setRoute({ name: "review", skill })} onBack={() => setRoute({ name: "market" })} />;
