@@ -30,6 +30,20 @@ def ffmpeg_available() -> bool:
     return shutil.which(settings.ffmpeg_bin) is not None
 
 
+def is_audio_only(content_type: str | None, data: bytes) -> bool:
+    """True for a clip that carries sound but no picture: a glasses turn records the
+    question with the phone (or glasses) microphone as m4a/wav and sends the view as a photo.
+    Decided from the upload's content type, else from the file header."""
+    if (content_type or "").lower().startswith("audio/"):
+        return True
+    head = data[:16]
+    if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+        return True
+    if head[4:8] == b"ftyp" and head[8:12] in (b"M4A ", b"M4B "):
+        return True
+    return head[:3] == b"ID3"
+
+
 async def media_to_wav(data: bytes, sample_rate: int = 16000) -> bytes:
     """Extract/convert any audio or video ffmpeg can read into mono 16-bit PCM WAV."""
     if not ffmpeg_available():

@@ -180,7 +180,8 @@ async def session_turn(
 
     With a clip and no transcript, the clip's audio track is transcribed first
     (Voice Transcribe, biased to the skill vocabulary) so the guide gets the words
-    as text and the app can show them in the user's bubble.
+    as text and the app can show them in the user's bubble. An audio-only clip
+    (m4a/wav, the glasses path) is transcribed and not forwarded as video.
     """
     session = _session_or_404(session_id)
     if session.completed:
@@ -192,6 +193,11 @@ async def session_turn(
         raise HTTPException(422, "send a transcript, a clip, or a photo")
 
     transcript = transcript.strip()
+    # A glasses turn sends the question as an audio file (no video track) plus a photo from the
+    # glasses camera: the audio is transcribed and the guide gets text and the photo, never an
+    # audio-only file dressed up as a video.
+    audio_only = bool(clip_bytes) and asr.is_audio_only(clip.content_type if clip else None, clip_bytes or b"")
+    guide_clip = None if audio_only else clip_bytes
 
     async def words() -> str:
         """The transcript to use: as sent, else transcribed from the clip's audio track."""
@@ -214,7 +220,7 @@ async def session_turn(
                     yield event({"transcribing": True})
                 heard = await words()
                 yield event({"transcript": heard})
-                async for delta in guide.turn_stream(client, skill, session, heard, clip_bytes, photo_bytes):
+                async for delta in guide.turn_stream(client, skill, session, heard, guide_clip, photo_bytes):
                     yield event({"delta": delta})
                 yield event({"done": True, "current_step": session.current_step})
             except Exception as exc:  # the phone shows this in a bubble
@@ -223,7 +229,7 @@ async def session_turn(
         return StreamingResponse(sse(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     heard = await words()
-    reply = await guide.turn(client, skill, session, heard, clip_bytes, photo_bytes)
+    reply = await guide.turn(client, skill, session, heard, guide_clip, photo_bytes)
     return TurnResponse(reply=reply, transcript=heard, current_step=session.current_step, session_id=session.id)
 
 
