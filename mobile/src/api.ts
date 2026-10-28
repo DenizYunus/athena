@@ -70,6 +70,16 @@ export type TurnResponse = { reply: string; transcript: string; current_step: nu
 
 export type Capture = { photoUri: string | null; note: string };
 
+/** The multipart name and type for a clip: the phone records an mp4; a glasses turn records
+ *  the question as audio only (m4a), which the backend transcribes without treating it as video. */
+function clipPart(uri: string): { name: string; type: string } {
+  const lower = uri.toLowerCase().split("?")[0];
+  if (lower.endsWith(".m4a") || lower.endsWith(".aac")) return { name: "question.m4a", type: "audio/mp4" };
+  if (lower.endsWith(".wav")) return { name: "question.wav", type: "audio/wav" };
+  if (lower.endsWith(".3gp")) return { name: "question.3gp", type: "audio/3gpp" };
+  return { name: "clip.mp4", type: "video/mp4" };
+}
+
 export class ApiError extends Error {
   constructor(message: string, public status?: number) {
     super(message);
@@ -105,6 +115,43 @@ export class Api {
     if (/^https?:\/\//.test(reference)) return reference;
     const name = reference.split("/").pop();
     return name ? this.url(`/skills/${skillId}/media/${name}`) : null;
+  }
+
+  /** POST a multipart form and parse the JSON reply. React Native's XMLHttpRequest accepts
+   *  `{ uri, name, type }` file parts; the `fetch` that Expo SDK 58 installs globally does not
+   *  (its FormData conversion only takes strings and Blobs), so every upload goes through here. */
+  private multipart<T>(path: string, form: FormData, timeoutMs = 120000): Promise<T> {
+    const url = this.url(path);
+    const headers = this.headers();
+    return new Promise<T>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", url);
+      for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+      xhr.timeout = timeoutMs;
+      xhr.onerror = () => reject(new ApiError("Network request failed"));
+      xhr.ontimeout = () => reject(new ApiError("The backend took too long to answer"));
+      xhr.onload = () => {
+        const text = xhr.responseText || "";
+        if (xhr.status < 200 || xhr.status >= 300) {
+          let detail = xhr.statusText || `HTTP ${xhr.status}`;
+          try {
+            detail = JSON.parse(text).detail ?? detail;
+          } catch {}
+          reject(new ApiError(`${xhr.status}: ${detail}`, xhr.status));
+          return;
+        }
+        if (xhr.status === 204 || !text) {
+          resolve(undefined as T);
+          return;
+        }
+        try {
+          resolve(JSON.parse(text) as T);
+        } catch {
+          reject(new ApiError("The backend sent a reply that is not JSON"));
+        }
+      };
+      xhr.send(form as any);
+    });
   }
 
   private async handle<T>(res: Response): Promise<T> {
@@ -154,10 +201,9 @@ export class Api {
   async turn(sessionId: string, opts: { transcript?: string; clipUri?: string; photoUri?: string }): Promise<TurnResponse> {
     const form = new FormData();
     form.append("transcript", opts.transcript ?? "");
-    if (opts.clipUri) form.append("clip", { uri: opts.clipUri, name: "clip.mp4", type: "video/mp4" } as any);
+    if (opts.clipUri) form.append("clip", { uri: opts.clipUri, ...clipPart(opts.clipUri) } as any);
     if (opts.photoUri) form.append("photo", { uri: opts.photoUri, name: "photo.jpg", type: "image/jpeg" } as any);
-    const res = await fetch(this.url(`/sessions/${sessionId}/turn`), { method: "POST", headers: this.headers(), body: form });
-    return this.handle(res);
+    return this.multipart(`/sessions/${sessionId}/turn`, form);
   }
 
   /** Streamed push-to-talk turn. The backend transcribes the clip's audio first, then asks the guide.
@@ -171,7 +217,7 @@ export class Api {
   ): Promise<TurnResponse> {
     const form = new FormData();
     form.append("transcript", opts.transcript ?? "");
-    if (opts.clipUri) form.append("clip", { uri: opts.clipUri, name: "clip.mp4", type: "video/mp4" } as any);
+    if (opts.clipUri) form.append("clip", { uri: opts.clipUri, ...clipPart(opts.clipUri) } as any);
     if (opts.photoUri) form.append("photo", { uri: opts.photoUri, name: "photo.jpg", type: "image/jpeg" } as any);
     const url = this.url(`/sessions/${sessionId}/turn?stream=true`);
     const headers = this.headers({ Accept: "text/event-stream" });
@@ -250,16 +296,14 @@ export class Api {
   async verify(sessionId: string, photoUri: string): Promise<VerifyResponse> {
     const form = new FormData();
     form.append("photo", { uri: photoUri, name: "photo.jpg", type: "image/jpeg" } as any);
-    const res = await fetch(this.url(`/sessions/${sessionId}/verify`), { method: "POST", headers: this.headers(), body: form });
-    return this.handle(res);
+    return this.multipart(`/sessions/${sessionId}/verify`, form);
   }
 
   async highlight(sessionId: string, photoUri: string, concept = ""): Promise<Highlight | null> {
     const form = new FormData();
     form.append("photo", { uri: photoUri, name: "photo.jpg", type: "image/jpeg" } as any);
     form.append("concept", concept);
-    const res = await fetch(this.url(`/sessions/${sessionId}/highlight`), { method: "POST", headers: this.headers(), body: form });
-    return this.handle(res);
+    return this.multipart(`/sessions/${sessionId}/highlight`, form);
   }
 
   async skip(sessionId: string): Promise<Session> {
@@ -273,8 +317,7 @@ export class Api {
     const isWav = uri.toLowerCase().endsWith(".wav");
     form.append("clip", { uri, name: isWav ? "note.wav" : "note.mp4", type: isWav ? "audio/wav" : "video/mp4" } as any);
     form.append("keywords", keywords.join(", "));
-    const res = await fetch(this.url("/author/transcribe"), { method: "POST", headers: this.headers(), body: form });
-    const body = await this.handle<{ transcript: string }>(res);
+    const body = await this.multipart<{ transcript: string }>("/author/transcribe", form);
     return body.transcript;
   }
 
@@ -291,7 +334,6 @@ export class Api {
       form.append("notes", c.note);
     });
     withoutPhoto.forEach((c) => form.append("notes", c.note));
-    const res = await fetch(this.url("/skills/compile"), { method: "POST", headers: this.headers(), body: form });
-    return this.handle(res);
+    return this.multipart("/skills/compile", form, 300000);
   }
 }
