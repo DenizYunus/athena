@@ -67,7 +67,7 @@ The backend needs `ffmpeg` on the Mac (`brew install ffmpeg`) to transcribe clip
 
 ## Mobile app
 
-Expo SDK 58, React Native, TypeScript, no navigation library (six screens, one switch). `expo-camera` records the clip with audio, `expo-audio` streams raw PCM from the mic to the transcription relay while the author dictates a note (and writes the WAV as fallback), `react-native-svg` draws the SAM masks, `expo-speech` reads replies aloud, `expo-secure-store` keeps the backend URL and key.
+Expo SDK 58, React Native, TypeScript, no navigation library (six screens, one switch). `expo-camera` records the clip with audio, `expo-audio` streams raw PCM from the mic to the transcription relay while the author dictates a note (and writes the WAV as fallback), `react-native-svg` draws the SAM masks, `expo-speech` reads replies aloud, `expo-secure-store` keeps the backend URL, the key and the glasses source. Multipart uploads go through `XMLHttpRequest`: the `fetch` that Expo SDK 58 installs globally rejects React Native's `{ uri, name, type }` file parts ("Unsupported FormDataPart implementation"), so photo and clip uploads through `fetch` fail on a device.
 
 ```bash
 cd mobile && npm install
@@ -85,6 +85,16 @@ cd android && JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Content
 ```
 
 The release build is signed with the debug keystore, which is fine for sideloading and demos.
+
+## Glasses
+
+The session can take its frames from Ray-Ban Meta glasses instead of the phone camera, through the [Meta Wearables Device Access Toolkit](https://wearables.developer.meta.com/docs/getting-started-toolkit) 1.0.1 (Android only). The bridge is an Expo local module in `mobile/modules/glasses-bridge/` (Kotlin, Expo Modules API): it registers the app with Meta AI, opens a device session, streams the glasses camera at 720x1280 (the toolkit's own quality ladder may step down to 504x896 or 360x640 over Bluetooth), takes photos with `capturePhoto()`, and pushes 600x600 cards to the lens display when the glasses have one. Its config plugin adds the toolkit's manifest entries (`APPLICATION_ID` / `CLIENT_TOKEN`, both `0` in Developer Mode, and the `athena://` callback scheme), so `npx expo prebuild --platform android --no-install --clean` produces a building project.
+
+In a session, tap **Glasses** next to the Live pill. The preview behind the chat bubbles switches to the glasses stream, the check button sends a glasses photo to the verifier (the SAM highlight is drawn on that photo), and push-to-talk records your question as an audio file with `expo-audio` and sends it with a glasses photo. The backend transcribes an audio-only clip and does not forward it to the guide as video (a live probe showed Muse Spark accepts an audio-only `input_video` but ignores the sound, answering that it "hears complete silence"). With the toggle off nothing changes: the phone camera records the clip and takes the photo as before.
+
+**What works on the Mock Device Kit** (Settings → Glasses → Mock Device Kit, the default; no hardware, no Meta AI app): registration and permissions are simulated, the phone's back camera stands in for the glasses camera and streams through the toolkit's real encode/decode path, `capturePhoto()` returns the mock's configured image or, failing that, the latest stream frame, and the push-to-talk and check flows run end to end against the backend. Verified on an Android 16 (API 36) emulator whose virtual-scene camera fed the mock: the pill reads "Glasses ✓" within about a second, the preview shows the decoded I420 stream (480x640 there, the emulator camera's own size; the mock streams the phone camera at its native resolution, while real glasses negotiate the 720x1280 the module asks for), the check button's glasses photo came back with an "unclear" verdict for the virtual living room, and a push-to-talk turn sent the audio file plus a glasses photo and got a spoken reply about the photo. The toolkit logs `Failed to read metadata from manifest … the app might be misconfigured` once at connect time: that is its reaction to the Developer Mode value `0` and is expected without a published integration. The mock kit does not simulate the lens display, but pairing it as a Display model lets the card path be exercised.
+
+**What needs hardware**: real Ray-Ban Meta glasses (Gen 1/2, Oakley Meta HSTN/Vanguard, Meta Ray-Ban Display) paired to the Meta AI app **V292 or newer** with glasses firmware **V128 or newer**, Developer Mode on in Meta AI (Settings → App Info, tap App Version five times), Bluetooth permission on the phone, and Android 10+ (the toolkit libraries declare minSdk 29, so the app's minSdk is 29). Untested here for lack of glasses: the registration round trip through Meta AI, the camera permission prompt, the decoded frame layout on hardware HEVC decoders (the module assumes the planar I420 the toolkit asks its decoder for; `yuv: "nv12"` is a one-line switch), the glasses microphone (the question is recorded with the phone mic; routing the glasses mic needs Bluetooth SCO), and the lens cards. Full toolkit access is limited to the countries where the glasses are sold.
 
 ## Backend
 
@@ -106,7 +116,7 @@ Endpoints:
 | GET | `/skills/{id}` | One skill with all steps |
 | POST | `/sessions` | Start a session `{skill_id, mode}` (mode defaults to `ptt`) |
 | GET | `/sessions/{id}` | Session state, current step, transcript, verdicts |
-| POST | `/sessions/{id}/turn` | Push-to-talk turn. Multipart: `transcript` (text), `clip` (mp4, optional), `photo` (jpeg, optional). With a clip and no transcript the audio track is transcribed first. `?stream=true` returns server-sent events: `transcribing`, `transcript`, `delta`…, `done` (or `error`) |
+| POST | `/sessions/{id}/turn` | Push-to-talk turn. Multipart: `transcript` (text), `clip` (mp4, or an audio-only m4a/wav from a glasses turn, optional), `photo` (jpeg, optional). With a clip and no transcript the audio track is transcribed first; an audio-only clip is transcribed and not sent to the guide as video. `?stream=true` returns server-sent events: `transcribing`, `transcript`, `delta`…, `done` (or `error`) |
 | POST | `/sessions/{id}/verify` | Snapshot check. Multipart: `photo`. Returns the verdict (advances on pass) and the SAM highlight for the step's part; `?highlight=false` skips SAM |
 | POST | `/sessions/{id}/highlight` | SAM only. Multipart: `photo`, optional `concept` |
 | POST | `/sessions/{id}/skip` | Skip a non-gate step |
@@ -148,6 +158,8 @@ mobile/
   App.tsx          screen switch
   src/api.ts       backend client
   src/live.ts      WebSocket client for the live transcript (PCM in, transcript events out)
+  src/glasses.ts   the Glasses toggle: a hook over the native bridge (connect, frames, capturePhoto, lens cards)
+  modules/glasses-bridge/  Expo local module (Kotlin) wrapping the Wearables Device Access Toolkit, plus its config plugin
   src/HighlightOverlay.tsx  the learner's photo with the SAM mask and box drawn over it
   src/screens/     Marketplace, SkillDetail, Session (push to talk), AuthorCapture, AuthorReview, Settings
 ```
