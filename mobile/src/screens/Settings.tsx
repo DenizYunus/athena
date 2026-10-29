@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { Api } from "../api";
 import { saveSettings, Settings } from "../settings";
 import { colors, radius } from "../theme";
@@ -8,10 +8,11 @@ import { GhostButton, PrimaryButton } from "../ui";
 export function SettingsScreen({ settings, onSaved, onBack }: { settings: Settings; onSaved: (s: Settings) => void; onBack: () => void }) {
   const [backendUrl, setBackendUrl] = useState(settings.backendUrl);
   const [apiKey, setApiKey] = useState(settings.apiKey);
+  const [glassesMock, setGlassesMock] = useState(settings.glassesMock);
   const [status, setStatus] = useState<string>("");
 
   async function save() {
-    const next = { backendUrl: backendUrl.trim().replace(/\/+$/, ""), apiKey: apiKey.trim() };
+    const next = { backendUrl: backendUrl.trim().replace(/\/+$/, ""), apiKey: apiKey.trim(), glassesMock };
     await saveSettings(next);
     onSaved(next);
     setStatus("Saved.");
@@ -20,7 +21,7 @@ export function SettingsScreen({ settings, onSaved, onBack }: { settings: Settin
   async function test() {
     setStatus("Testing…");
     try {
-      const next = { backendUrl: backendUrl.trim().replace(/\/+$/, ""), apiKey: apiKey.trim() };
+      const next = { backendUrl: backendUrl.trim().replace(/\/+$/, ""), apiKey: apiKey.trim(), glassesMock };
       const h = await new Api(next).health();
       setStatus(
         `Backend OK · ${h.skills} skill(s) · ` +
@@ -64,6 +65,19 @@ export function SettingsScreen({ settings, onSaved, onBack }: { settings: Settin
       />
       <Text style={s.help}>Stored in the phone's secure keystore and sent to your backend only, as the X-Model-API-Key header.</Text>
 
+      <Text style={s.label}>Glasses</Text>
+      <View style={s.switchRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={s.switchTitle}>{glassesMock ? "Mock Device Kit" : "Ray-Ban Meta glasses"}</Text>
+          <Text style={s.help}>
+            {glassesMock
+              ? "The Glasses toggle in a session simulates the glasses with the toolkit's Mock Device Kit: the phone camera stands in for the glasses camera. No hardware or Meta AI app needed."
+              : "The Glasses toggle connects to real glasses through the Meta AI app (Developer Mode on, app V292+, glasses firmware V128+)."}
+          </Text>
+        </View>
+        <Switch value={glassesMock} onValueChange={setGlassesMock} trackColor={{ true: colors.amberDark, false: colors.border }} thumbColor={glassesMock ? colors.amber : colors.muted} />
+      </View>
+
       <View style={{ height: 8 }} />
       <PrimaryButton label="Save" onPress={save} />
       <View style={s.row}>
@@ -93,5 +107,7 @@ const s = StyleSheet.create({
   help: { color: colors.muted, fontSize: 13, lineHeight: 18 },
   code: { color: colors.text2, fontFamily: "monospace" },
   row: { flexDirection: "row", gap: 10, marginTop: 10 },
+  switchRow: { flexDirection: "row", alignItems: "center", gap: 12, padding: 14, borderRadius: radius.md, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  switchTitle: { color: colors.text, fontSize: 15, fontWeight: "600", marginBottom: 4 },
   status: { color: colors.text2, fontSize: 14, marginTop: 12, lineHeight: 20 },
 });

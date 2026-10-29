@@ -1,0 +1,10 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Needed by the Device Access Toolkit to talk to the glasses through the Meta AI app.
+       BLUETOOTH_CONNECT is a runtime permission on Android 12+; the app asks for it before connecting. -->
+  <uses-permission android:name="android.permission.BLUETOOTH" />
+  <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+  <uses-permission android:name="android.permission.INTERNET" />
+  <!-- The Mock Device Kit can feed the phone camera as the glasses stream; the app already asks for CAMERA. -->
+  <uses-feature android:name="android.hardware.camera" android:required="false" />
+  <application />
+</manifest>

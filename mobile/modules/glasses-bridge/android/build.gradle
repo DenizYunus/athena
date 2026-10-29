@@ -1,0 +1,27 @@
+// Expo local module wrapping the Meta Wearables Device Access Toolkit (DAT) 1.0.1.
+// The toolkit is on Maven Central under com.meta.wearable; the Expo template's
+// mavenCentral() repository is enough. Compiled with Kotlin 2.2 (React Native 0.88 ships 2.2.0).
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'app.athena'
+version = '0.1.0'
+
+android {
+  namespace "app.athena.glasses"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+}
+
+dependencies {
+  def mwdat = "1.0.1"
+  implementation "com.meta.wearable:mwdat-core:$mwdat"
+  implementation "com.meta.wearable:mwdat-camera:$mwdat"
+  implementation "com.meta.wearable:mwdat-display:$mwdat"
+  implementation "com.meta.wearable:mwdat-mockdevice:$mwdat"
+  implementation "androidx.exifinterface:exifinterface:1.4.2"
+}

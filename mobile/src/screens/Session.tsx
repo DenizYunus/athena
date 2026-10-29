@@ -4,11 +4,18 @@
 // and only then asks the guide. The transcript lands in your bubble first; the reply streams
 // into the guide's bubble and is spoken. The check button takes one photo and runs the strict
 // verification; SAM 3.1 marks the part on the photo when it finds it.
+//
+// Glasses toggle (Android, modules/glasses-bridge): the frames come from Ray-Ban Meta glasses
+// through the Device Access Toolkit instead of the phone camera. Push to talk then records the
+// question as an audio file with expo-audio and sends it with a photo from the glasses; the check
+// button sends a glasses photo. Nothing here changes for the phone path while the toggle is off.
+import { RecordingPresets, setAudioModeAsync, useAudioRecorder, type RecordingOptions } from "expo-audio";
 import { CameraView, useCameraPermissions, useMicrophonePermissions } from "expo-camera";
 import * as Speech from "expo-speech";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
-import { Api, Highlight, Session, Skill, Verdict } from "../api";
+import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from "react-native";
+import { Api, Highlight, Session, Skill, Step, Verdict } from "../api";
+import { useGlasses, type Card, type GlassesState } from "../glasses";
 import { HighlightOverlay } from "../HighlightOverlay";
 import { colors } from "../theme";
 import { GhostButton, PrimaryButton } from "../ui";
@@ -17,8 +24,27 @@ type Bubble = { id: number; who: "user" | "guide"; text: string; tone?: "pass" |
 type Phase = "idle" | "recording" | "sending" | "checking" | "speaking";
 
 const BUBBLE_OPACITY = [1, 0.9, 0.7, 0.5, 0.3, 0.15];
+// How long a verdict card stays on the lens before the next step's card replaces it.
+const VERDICT_CARD_MS = 2500;
 
-export function SessionScreen({ api, skill, session: initial, onExit }: { api: Api; skill: Skill; session: Session; onExit: () => void }) {
+// The question for a glasses turn: 16 kHz mono AAC in an m4a. The backend transcribes it and
+// never forwards an audio-only file to the guide as video.
+const QUESTION_AUDIO: RecordingOptions = { ...RecordingPresets.HIGH_QUALITY, extension: ".m4a", sampleRate: 16000, numberOfChannels: 1, bitRate: 64000 };
+
+export function SessionScreen({
+  api,
+  skill,
+  session: initial,
+  onExit,
+  glassesMock = true,
+}: {
+  api: Api;
+  skill: Skill;
+  session: Session;
+  onExit: () => void;
+  /** Settings: the Glasses toggle uses the Mock Device Kit instead of real glasses. */
+  glassesMock?: boolean;
+}) {
   const [camPerm, requestCam] = useCameraPermissions();
   const [micPerm, requestMic] = useMicrophonePermissions();
   const camera = useRef<CameraView>(null);
@@ -32,9 +58,42 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
   const [overlay, setOverlay] = useState<{ photoUri: string; highlight: Highlight; color: string; caption: string } | null>(null);
   const nextId = useRef(1);
   const recordingPromise = useRef<Promise<{ uri: string } | undefined> | null>(null);
+  const secondsRef = useRef(0);
+
+  const glasses = useGlasses({ mock: glassesMock, quality: "high", frameRate: 15 });
+  const glassesOn = glasses.on;
+  const recorder = useAudioRecorder(QUESTION_AUDIO);
+  // Which source owns the turn being recorded: the tap that ends it is routed by this, not by the
+  // toggle, which could have changed in between.
+  const turnSourceRef = useRef<"phone" | "glasses">("phone");
+  // A glasses operation in flight (the mic being prepared, or a check): further glasses taps are
+  // ignored and the toggle and check button stay locked until it ends. Always null on the phone path.
+  const glassesOpRef = useRef<null | "arming" | "checking">(null);
+  // A glasses question is recording (from record() until the stop tap or an abort).
+  const glassesRecordingRef = useRef(false);
+  // Stops a glasses recording that outlived its turn (set below, once the recorder exists).
+  const releaseGlassesRecordingRef = useRef<() => void>(() => {});
+  // Whether the turn being sent carries a photo (the hint says what the guide is looking at).
+  const turnPhotoRef = useRef(false);
+  const [glassesOp, setGlassesOp] = useState<null | "arming" | "checking">(null);
+  const beginGlassesOp = (op: "arming" | "checking") => {
+    glassesOpRef.current = op;
+    setGlassesOp(op);
+  };
+  const endGlassesOp = () => {
+    glassesOpRef.current = null;
+    setGlassesOp(null);
+  };
+  // When the last verdict card went to the lens, so the next step's card does not replace it at once.
+  const verdictCardAtRef = useRef(0);
 
   const step = useMemo(() => skill.steps.find((st) => st.n === session.current_step) ?? skill.steps[0], [skill, session.current_step]);
   const total = skill.steps.length;
+  // The lens card for the step on screen right now. Restores read it at restore time, so a turn
+  // that ends after a skip puts the new step back, not the one captured when the turn began.
+  const stepCardRef = useRef<Card>(stepCard(step, total, session.completed));
+  stepCardRef.current = stepCard(step, total, session.completed);
+  const restoreStepCard = () => glasses.showCard(stepCardRef.current);
 
   const push = useCallback((b: Omit<Bubble, "id">): number => {
     const id = nextId.current++;
@@ -47,14 +106,23 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
   }, []);
 
   const say = useCallback((text: string) => {
+    // A new utterance (a skipped step's intro) ends a glasses question still recording; the phase
+    // alone may not change if the guide was already speaking. A no-op on the phone path.
+    releaseGlassesRecordingRef.current();
     Speech.stop();
     setPhase("speaking");
+    // A glasses question interrupts the guide with Speech.stop(); the stopped callback can arrive
+    // after the question is already recording and must not end it. Both refs stay unset on the phone path.
+    const settle = () => {
+      if (glassesOpRef.current || glassesRecordingRef.current) return;
+      setPhase("idle");
+    };
     Speech.speak(text, {
       language: "en-US",
       rate: 1.0,
-      onDone: () => setPhase("idle"),
-      onStopped: () => setPhase("idle"),
-      onError: () => setPhase("idle"),
+      onDone: settle,
+      onStopped: settle,
+      onError: settle,
     });
   }, []);
 
@@ -78,12 +146,57 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.current_step]);
 
+  // Lens card for the current step, once the glasses are live and whenever the step changes.
+  useEffect(() => {
+    if (!glasses.live) return;
+    const card = stepCard(step, total, session.completed);
+    const holdMs = VERDICT_CARD_MS - (Date.now() - verdictCardAtRef.current);
+    if (holdMs <= 0) {
+      glasses.showCard(card);
+      return;
+    }
+    const t = setTimeout(() => {
+      // A turn or a check started meanwhile owns the lens; it restores the step card when it ends.
+      if (glassesOpRef.current || phaseRef.current === "recording" || phaseRef.current === "sending" || phaseRef.current === "checking") return;
+      glasses.showCard(card);
+    }, holdMs);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [glasses.live, session.current_step, session.completed]);
+
+  // A glasses recording never outlives its turn: if the phase leaves recording some other way
+  // (a skipped step starts the next intro, for one), the mic is released. A no-op on the phone path.
+  releaseGlassesRecordingRef.current = () => {
+    if (!glassesRecordingRef.current) return;
+    glassesRecordingRef.current = false;
+    recorder.stop().catch(() => {});
+    setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
+    restoreStepCard();
+  };
+  useEffect(() => {
+    if (phase === "recording" || phase === "sending") return;
+    releaseGlassesRecordingRef.current();
+  }, [phase]);
+
+  useEffect(() => {
+    if (glasses.state === "error" && glasses.message) push({ who: "guide", text: `Glasses: ${glasses.message}`, tone: "fail" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [glasses.state, glasses.message]);
+
   useEffect(() => {
     if (phase !== "recording") {
       setSeconds(0);
+      secondsRef.current = 0;
       return;
     }
-    const t = setInterval(() => setSeconds((x) => x + 1), 1000);
+    const t = setInterval(
+      () =>
+        setSeconds((x) => {
+          secondsRef.current = x + 1;
+          return x + 1;
+        }),
+      1000,
+    );
     return () => clearInterval(t);
   }, [phase]);
 
@@ -93,6 +206,8 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
   }, [phase]);
 
   async function onTapRecord() {
+    if (phase === "recording" && turnSourceRef.current === "glasses") return onTapRecordGlasses();
+    if (phase !== "recording" && glassesOn) return onTapRecordGlasses();
     if (!camera.current) return;
     if (phase === "idle" || phase === "speaking") {
       Speech.stop();
@@ -101,6 +216,7 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
         setCameraMode("video");
         await wait(400);
       }
+      turnSourceRef.current = "phone";
       setPhase("recording");
       try {
         recordingPromise.current = camera.current.recordAsync({ maxDuration: 20 });
@@ -125,24 +241,95 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
     }
   }
 
-  async function sendClip(uri: string) {
+  /** Glasses turn: the question is recorded by expo-audio (no camera recording), then sent with a glasses photo. */
+  async function onTapRecordGlasses() {
+    if (phase === "idle" || phase === "speaking") {
+      if (glassesOpRef.current) return;
+      if (!glasses.live) {
+        push({ who: "guide", text: glassesNotLiveText(glasses.state, glasses.message, glasses.mock), tone: "unclear" });
+        return;
+      }
+      beginGlassesOp("arming");
+      Speech.stop();
+      setOverlay(null);
+      try {
+        await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+        await recorder.prepareToRecordAsync();
+        recorder.record();
+        turnSourceRef.current = "glasses";
+        glassesRecordingRef.current = true;
+        setPhase("recording");
+        glasses.showCard({ kind: "listening", eyebrow: `step ${step.n}`, title: "Listening…", body: "A photo of what you're looking at goes with it", hint: "Tap again to send · reply comes as voice + text" });
+      } catch (e: any) {
+        // Release the recorder whether it got as far as recording or only prepared; a prepared
+        // recorder that is never stopped makes every later prepareToRecordAsync() fail.
+        try {
+          await recorder.stop();
+        } catch {}
+        setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
+        glassesRecordingRef.current = false;
+        push({ who: "guide", text: friendly(e), tone: "fail" });
+        setPhase("idle");
+        restoreStepCard();
+      } finally {
+        endGlassesOp();
+      }
+      return;
+    }
+    if (phase === "recording") {
+      glassesRecordingRef.current = false;
+      turnPhotoRef.current = true; // until capturePhoto says otherwise (sendClip sets the real value)
+      const secs = Math.max(secondsRef.current, 1);
+      setPhase("sending");
+      setStage("uploading");
+      let audioUri: string | null = null;
+      try {
+        await recorder.stop();
+        audioUri = recorder.uri;
+      } catch (e: any) {
+        push({ who: "guide", text: friendly(e), tone: "fail" });
+      }
+      setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true }).catch(() => {});
+      let photoUri: string | undefined;
+      try {
+        photoUri = (await glasses.capturePhoto()).uri;
+      } catch (e: any) {
+        push({ who: "guide", text: `No glasses photo: ${friendly(e)}`, tone: "unclear" });
+      }
+      if (!audioUri && !photoUri) {
+        setStage("");
+        setPhase("idle");
+        restoreStepCard();
+        return;
+      }
+      await sendClip(audioUri ?? undefined, photoUri, secs, true);
+      restoreStepCard();
+    }
+  }
+
+  async function sendClip(clipUri?: string, photoUri?: string, secsOverride?: number, glassesTurn = false) {
+    turnPhotoRef.current = !!photoUri;
     setPhase("sending");
     setStage("uploading");
-    const secs = Math.max(seconds, 1);
-    const userId = push({ who: "user", text: `Clip · ${secs} s · sending…`, pending: true });
+    const secs = Math.max(secsOverride ?? seconds, 1);
+    const what = !glassesTurn ? `Clip · ${secs} s` : clipUri ? `Voice · ${secs} s${photoUri ? " · glasses photo" : ""}` : "Glasses photo";
+    const nothingHeard = !glassesTurn ? "no words heard, the guide looks at the video" : photoUri ? "no words heard, the guide looks at the photo" : "no words heard";
+    const userId = push({ who: "user", text: `${what} · sending…`, pending: true });
     let guideId: number | null = null;
+    let heard = false;
     try {
       const res = await api.turnStream(
         session.id,
-        { clipUri: uri },
+        { clipUri, photoUri },
         {
           transcribing: () => {
             setStage("transcribing");
-            update(userId, { text: `Clip · ${secs} s · transcribing your words…` });
+            update(userId, { text: `${what} · transcribing your words…` });
           },
           transcript: (text) => {
+            heard = true;
             setStage("thinking");
-            update(userId, { text: text || `Clip · ${secs} s · no words heard, the guide looks at the video`, pending: false });
+            update(userId, { text: text || `${what} · ${nothingHeard}`, pending: false });
           },
           delta: (_d, reply) => {
             if (guideId === null) guideId = push({ who: "guide", text: reply, pending: true });
@@ -157,7 +344,8 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
       say(res.reply);
     } catch (e: any) {
       setStage("");
-      update(userId, { pending: false });
+      // Glasses turns only (the phone path stays as it was): drop "transcribing…" if it never finished.
+      update(userId, glassesTurn && !heard ? { pending: false, text: what } : { pending: false });
       if (guideId !== null) update(guideId, { pending: false });
       push({ who: "guide", text: friendly(e), tone: "fail" });
       setPhase("idle");
@@ -165,6 +353,7 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
   }
 
   async function onTapCheck() {
+    if (glassesOn) return onTapCheckGlasses();
     if (!camera.current || (phase !== "idle" && phase !== "speaking")) return;
     Speech.stop();
     setOverlay(null);
@@ -177,28 +366,63 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
       const photo = await camera.current.takePictureAsync({ quality: 0.85, skipProcessing: true });
       if (!photo?.uri) throw new Error("no photo");
       push({ who: "user", text: `Photo sent for step ${step.n}` });
-      const res = await api.verify(session.id, photo.uri);
-      const v = res.verdict;
-      push({ who: "guide", text: verdictLine(v, step.safety_gate), tone: v.status });
-      if (res.highlight && res.highlight.objects.length) {
-        const color = toneColor(v.status);
-        const caption = v.status === "pass" ? "Verified" : v.status === "fail" ? "Look here" : "This is what I see";
-        setOverlay({ photoUri: photo.uri, highlight: res.highlight, color, caption });
-      }
-      setSession((s) => ({ ...s, current_step: res.current_step, completed: res.completed }));
-      if (res.completed) {
-        say(`${v.reason} That was the last step. Nice work.`);
-      } else if (!res.advanced) {
-        say(verdictSpeech(v));
-      } else {
-        Speech.speak(`Step ${step.n} verified.`, { language: "en-US" });
-        setPhase("idle");
-      }
+      await verifyPhoto(photo.uri);
     } catch (e: any) {
       push({ who: "guide", text: friendly(e), tone: "fail" });
       setPhase("idle");
     } finally {
       setCameraMode("video");
+    }
+  }
+
+  /** Glasses check: capturePhoto() on the stream (or the latest frame) goes to the verifier. */
+  async function onTapCheckGlasses() {
+    if (phase !== "idle" && phase !== "speaking") return;
+    if (glassesOpRef.current) return;
+    if (!glasses.live) {
+      push({ who: "guide", text: glassesNotLiveText(glasses.state, glasses.message, glasses.mock), tone: "unclear" });
+      return;
+    }
+    beginGlassesOp("checking");
+    Speech.stop();
+    setOverlay(null);
+    setPhase("checking");
+    glasses.showCard({ kind: "checking", eyebrow: `STEP ${step.n} OF ${total} · photo taken`, title: "Checking…", body: "Comparing with the reference photo. Keep your hands where they are.", hint: "usually 3 to 5 seconds" });
+    try {
+      const photo = await glasses.capturePhoto();
+      push({ who: "user", text: `Photo from the glasses sent for step ${step.n}` });
+      await verifyPhoto(photo.uri);
+    } catch (e: any) {
+      push({ who: "guide", text: friendly(e), tone: "fail" });
+      setPhase("idle");
+      restoreStepCard();
+    } finally {
+      endGlassesOp();
+    }
+  }
+
+  /** The strict verification and what follows from the verdict, for a photo from either camera. */
+  async function verifyPhoto(photoUri: string) {
+    const res = await api.verify(session.id, photoUri);
+    const v = res.verdict;
+    push({ who: "guide", text: verdictLine(v, step.safety_gate), tone: v.status });
+    if (res.highlight && res.highlight.objects.length) {
+      const color = toneColor(v.status);
+      const caption = v.status === "pass" ? "Verified" : v.status === "fail" ? "Look here" : "This is what I see";
+      setOverlay({ photoUri, highlight: res.highlight, color, caption });
+    }
+    setSession((s) => ({ ...s, current_step: res.current_step, completed: res.completed }));
+    if (glasses.on) {
+      verdictCardAtRef.current = Date.now();
+      glasses.showCard(verdictCard(v, step, res.completed));
+    }
+    if (res.completed) {
+      say(`${v.reason} That was the last step. Nice work.`);
+    } else if (!res.advanced) {
+      say(verdictSpeech(v));
+    } else {
+      Speech.speak(`Step ${step.n} verified.`, { language: "en-US" });
+      setPhase("idle");
     }
   }
 
@@ -225,10 +449,26 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
   }
 
   const visible = bubbles.slice(-BUBBLE_OPACITY.length);
+  const busy = phase === "recording" || phase === "sending" || phase === "checking" || glassesOp !== null;
+  const glassesTurn = phase === "recording" ? turnSourceRef.current === "glasses" : glassesOn;
+  const glassesColor = glasses.live ? colors.pass : glasses.state === "error" ? colors.fail : colors.amber;
+  const glassesLabel = !glassesOn ? "Glasses" : glasses.live ? "Glasses ✓" : glasses.state === "error" ? "Glasses !" : "Glasses …";
+  const hint = glassesOn && !glasses.live && (phase === "idle" || phase === "speaking") ? glassesWaitText(glasses.state, glasses.message, glasses.mock) : hintFor(phase, stage, session.completed, glassesTurn, turnPhotoRef.current);
 
   return (
     <View style={s.root}>
-      <CameraView ref={camera} style={StyleSheet.absoluteFill} facing="back" mode={cameraMode} mute={false} />
+      {glassesOn ? (
+        glasses.frameUri ? (
+          <Image source={{ uri: glasses.frameUri }} style={StyleSheet.absoluteFill} resizeMode="cover" accessibilityLabel="Live view from the glasses" />
+        ) : (
+          <View style={[StyleSheet.absoluteFill, s.glassesWait]}>
+            <ActivityIndicator color={colors.amber} />
+            <Text style={s.glassesWaitText}>{glassesWaitText(glasses.state, glasses.message, glasses.mock)}</Text>
+          </View>
+        )
+      ) : (
+        <CameraView ref={camera} style={StyleSheet.absoluteFill} facing="back" mode={cameraMode} mute={false} />
+      )}
 
       <View style={s.top}>
         <Pressable onPress={onExit} style={s.roundBtn} accessibilityLabel="Exit session">
@@ -240,7 +480,9 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
         {phase === "recording" ? (
           <View style={[s.pill, { borderColor: colors.fail }]}>
             <View style={[s.dot, { backgroundColor: colors.fail }]} />
-            <Text style={[s.pillText, { color: colors.fail }]}>REC {fmt(seconds)} · video + voice</Text>
+            <Text style={[s.pillText, { color: colors.fail }]}>
+              REC {fmt(seconds)} · {glassesTurn ? "voice + glasses" : "video + voice"}
+            </Text>
           </View>
         ) : (
           <View style={s.pill}>
@@ -248,6 +490,17 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
             <Text style={[s.pillText, { color: colors.muted }]}>Live</Text>
           </View>
         )}
+        {glasses.available ? (
+          <Pressable
+            onPress={glasses.toggle}
+            disabled={busy}
+            style={[s.pill, glassesOn ? { borderColor: glassesColor } : null, busy ? { opacity: 0.6 } : null]}
+            accessibilityLabel={glassesOn ? "Glasses on, tap to use the phone camera" : "Glasses off, tap to use the glasses camera"}
+          >
+            <View style={[s.dot, { backgroundColor: glassesOn ? glassesColor : colors.dim }]} />
+            <Text style={[s.pillText, { color: glassesOn ? colors.text : colors.muted }]}>{glassesLabel}</Text>
+          </Pressable>
+        ) : null}
       </View>
       <View style={s.progress}>
         {skill.steps.map((st) => (
@@ -279,14 +532,19 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
       </View>
 
       <View style={s.controls}>
-        <Text style={s.hint}>{hintFor(phase, stage, session.completed)}</Text>
+        <Text style={s.hint}>{hint}</Text>
         <View style={s.controlRow}>
           <Pressable onPress={() => setShowSteps(true)} style={s.sideBtn} accessibilityLabel="Show steps">
             <Text style={s.sideBtnText}>Steps</Text>
           </Pressable>
 
           {phase === "idle" || phase === "speaking" ? (
-            <Pressable onPress={onTapRecord} style={[s.bigBtn, { backgroundColor: colors.amber, borderColor: colors.amberDark }]} accessibilityLabel="Tap to record a question with video" disabled={session.completed}>
+            <Pressable
+              onPress={onTapRecord}
+              style={[s.bigBtn, { backgroundColor: colors.amber, borderColor: colors.amberDark }]}
+              accessibilityLabel={glassesOn ? "Tap to record a question with a glasses photo" : "Tap to record a question with video"}
+              disabled={session.completed}
+            >
               <View style={s.micIcon} />
             </Pressable>
           ) : phase === "recording" ? (
@@ -299,7 +557,7 @@ export function SessionScreen({ api, skill, session: initial, onExit }: { api: A
             </View>
           )}
 
-          <Pressable onPress={onTapCheck} style={[s.sideBtn, { borderColor: colors.pass }]} accessibilityLabel="Check this step now" disabled={phase !== "idle" && phase !== "speaking"}>
+          <Pressable onPress={onTapCheck} style={[s.sideBtn, { borderColor: colors.pass }]} accessibilityLabel="Check this step now" disabled={(phase !== "idle" && phase !== "speaking") || glassesOp !== null}>
             <Text style={[s.sideBtnText, { color: colors.pass, fontSize: 20 }]}>✓</Text>
           </Pressable>
         </View>
@@ -360,20 +618,65 @@ function verdictSpeech(v: Verdict): string {
   return v.reason;
 }
 
-function hintFor(phase: Phase, stage: "" | "uploading" | "transcribing" | "thinking", completed: boolean) {
+function hintFor(phase: Phase, stage: "" | "uploading" | "transcribing" | "thinking", completed: boolean, glassesOn = false, withPhoto = false) {
   if (completed) return "All steps verified";
   switch (phase) {
     case "idle":
-      return "Tap to record video and your question";
+      return glassesOn ? "Tap to ask; a photo from the glasses goes with your voice" : "Tap to record video and your question";
     case "recording":
-      return "Recording video + voice · tap to send";
+      return glassesOn ? "Recording your voice · tap to send with a glasses photo" : "Recording video + voice · tap to send";
     case "sending":
-      return stage === "transcribing" ? "Transcribing what you said…" : stage === "thinking" ? "The guide is looking at your clip…" : "Sending the clip…";
+      if (!glassesOn) return stage === "transcribing" ? "Transcribing what you said…" : stage === "thinking" ? "The guide is looking at your clip…" : "Sending the clip…";
+      return stage === "transcribing" ? "Transcribing what you said…" : stage === "thinking" ? (withPhoto ? "The guide is looking at the glasses photo…" : "The guide is thinking…") : withPhoto ? "Sending your voice and the photo…" : "Sending your voice…";
     case "checking":
-      return "Checking this step from a photo…";
+      return glassesOn ? "Checking this step from the glasses photo…" : "Checking this step from a photo…";
     case "speaking":
       return "Reply on screen and spoken aloud";
   }
+}
+
+/** Said when a glasses action is tapped before frames are flowing. */
+function glassesNotLiveText(state: GlassesState, message: string | null, mock: boolean): string {
+  if (state === "error") return "The glasses did not connect. Tap the Glasses pill to go back to the phone camera, and again to retry.";
+  return `The glasses are not streaming yet. ${glassesWaitText(state, message, mock)}`;
+}
+
+function glassesWaitText(state: GlassesState, message: string | null, mock: boolean): string {
+  const where = mock ? "Mock Device Kit" : "Ray-Ban Meta";
+  switch (state) {
+    case "connecting":
+      return `Connecting to the glasses (${where})…`;
+    case "registering":
+      return "Approve Athena in the Meta AI app…";
+    case "permission":
+      return "Allow camera access in the Meta AI app…";
+    case "connected":
+      return "Glasses connected · starting the camera…";
+    case "streaming":
+      return "Waiting for the first frame…";
+    case "paused":
+      return "Stream paused from the glasses · tap the touchpad to resume";
+    case "error":
+      return `Glasses: ${message ?? "error"}`;
+    case "disconnected":
+      return `Glasses disconnected${message ? ` · ${message}` : ""}`;
+    default:
+      return "Glasses off";
+  }
+}
+
+// 600x600 lens cards for Meta Ray-Ban Display, after design/Glasses*.dc.html. Ignored on glasses without a display.
+function stepCard(step: Step, total: number, completed: boolean): Card {
+  if (completed) return { kind: "pass", eyebrow: "DONE", title: "All steps verified", body: "Nice work.", hint: "" };
+  if (step.safety_gate) return { kind: "gate", eyebrow: `SAFETY GATE · before step ${step.n}`, title: step.instruction, body: step.gate_requirement ?? step.expected_state, hint: 'Say "done" or tap check' };
+  return { kind: "step", eyebrow: `STEP ${step.n} OF ${total}`, title: step.instruction, body: step.expected_state, hint: 'Tap check when done · "repeat" · "help"' };
+}
+
+function verdictCard(v: Verdict, step: Step, completed: boolean): Card {
+  if (v.status === "pass") return { kind: "pass", eyebrow: completed ? "DONE" : `STEP ${step.n} VERIFIED`, title: completed ? "All steps verified" : "Verified", body: v.reason, hint: completed ? "" : "Next step coming up" };
+  if (v.status === "fail") return { kind: "fail", eyebrow: `NOT YET · step ${step.n}`, title: v.what_to_fix || v.reason, body: v.what_to_fix ? v.reason : "", hint: "Fix it, then check again" };
+  const ask = v.photo_request?.needed ? `${v.photo_request.what}${v.photo_request.angle ? ` · ${v.photo_request.angle}` : ""}` : v.reason;
+  return { kind: "unclear", eyebrow: `NEED A BETTER LOOK · step ${step.n}`, title: ask, body: v.photo_request?.needed ? v.reason : "", hint: "Hold still, then check again" };
 }
 
 function friendly(e: any): string {
@@ -387,7 +690,9 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.surface2 },
   center: { flex: 1, backgroundColor: colors.bg, padding: 24, justifyContent: "center", gap: 14 },
   permText: { color: colors.text, fontSize: 17, textAlign: "center", lineHeight: 24 },
-  top: { position: "absolute", top: 54, left: 16, right: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  glassesWait: { backgroundColor: colors.bg, alignItems: "center", justifyContent: "center", gap: 12 },
+  glassesWaitText: { color: colors.muted, fontSize: 13, paddingHorizontal: 32, textAlign: "center", lineHeight: 18 },
+  top: { position: "absolute", top: 54, left: 16, right: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 6 },
   roundBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: "rgba(15,17,21,0.75)", alignItems: "center", justifyContent: "center" },
   roundBtnText: { color: colors.text, fontSize: 18 },
   pill: { height: 32, paddingHorizontal: 12, borderRadius: 16, backgroundColor: "rgba(15,17,21,0.75)", flexDirection: "row", alignItems: "center", gap: 6, borderWidth: 1, borderColor: "transparent" },
@@ -403,7 +708,7 @@ const s = StyleSheet.create({
   bubblePending: { borderWidth: 1, borderColor: "rgba(245,184,46,0.6)", borderStyle: "dashed" },
   bubbleText: { color: colors.text, fontSize: 14, lineHeight: 19 },
   controls: { position: "absolute", left: 0, right: 0, bottom: 0, height: 150, paddingHorizontal: 20, paddingBottom: 26, justifyContent: "flex-end", alignItems: "center", gap: 10 },
-  hint: { color: colors.text, fontSize: 13, fontWeight: "500", textShadowColor: "rgba(0,0,0,0.8)", textShadowRadius: 3 },
+  hint: { color: colors.text, fontSize: 13, fontWeight: "500", textShadowColor: "rgba(0,0,0,0.8)", textShadowRadius: 3, textAlign: "center" },
   controlRow: { width: "100%", flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   sideBtn: { width: 56, height: 56, borderRadius: 28, backgroundColor: "rgba(26,29,35,0.85)", borderWidth: 1, borderColor: colors.border, alignItems: "center", justifyContent: "center" },
   sideBtnText: { color: colors.text, fontSize: 11, fontWeight: "600" },
