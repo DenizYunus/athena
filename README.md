@@ -10,7 +10,7 @@ Built for the Meta Global AI Developer Hackathon, Oct 27 to Nov 4, 2026. Track: 
 |---|---|
 | Hackathon | Meta Global AI Developer Hackathon, Oct 27 – Nov 4, 2026 |
 | Track · problem statement | Indie Developer · Build for Your World (skilled trades and home repair) |
-| Team | Deniz Yunus Gogus ([@DenizYunus](https://github.com/DenizYunus)), solo |
+| Team | Deniz Yunus Gogus ([@DenizYunus](https://github.com/DenizYunus)), Emre Can Dikmen |
 | Demo video (3 min) | TODO: link after upload (storyboard and recording plan in `demo/`) |
 | Code | this repository; APK on the [Releases](https://github.com/DenizYunus/athena/releases) page |
 | Meta models | `muse-spark-1.3`, `sam-3.1`, `muse-voice-transcribe-1.0`, `muse-image-1.0` (table below) |
