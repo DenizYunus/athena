@@ -8,7 +8,7 @@ Most hackathon forms ask for the same fields. Everything below is written to pas
 
 **Track:** Indie Developer · **Problem statement:** Build for Your World
 
-**Team:** Deniz Yunus Gogus (GitHub @DenizYunus), solo
+**Team:** Deniz Yunus Gogus (GitHub @DenizYunus), Emre Can Dikmen
 
 **Repository:** https://github.com/DenizYunus/athena · **Demo video:** TODO link
 
