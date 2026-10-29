@@ -76,6 +76,7 @@ Record in this order. Minimum takes: two per clip. Each row says what must be vi
 | E3 | Under the hood | Terminal: `git log --format='%ad %s' --date=short` scrolled. | Dates Oct 27 and 28, 2026. | 4 s |
 | E4 | Under the hood | Browser: github.com/DenizYunus/athena/releases. | The APK asset. | 4 s |
 | G1 | Close | Browser or QuickTime: `design/GlassesStep.dc.html` and `design/GlassesUnclear.dc.html` opened, slow pan. | The 600×600 glasses cards. | 8 s |
+| G2 | Close (optional) | scrcpy on the emulator (`athena_api36`) or the phone with Settings → Glasses → Mock Device Kit: open a session, tap the **Glasses** pill, wait for "Glasses ✓", tap ✓ once. | The pill turning to Glasses ✓, the preview switching to the glasses stream, a verdict. | 10 s |
 
 Recording tips that save retakes:
 

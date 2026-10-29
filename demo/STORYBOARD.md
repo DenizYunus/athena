@@ -20,7 +20,7 @@ The sink skill carries the session scenes because any home can do it for real in
 | 1:55–2:15 | Fail, fix, pass | Step 2 with only **one** slip nut loosened. Tap ✓: *Not yet · …* with the fix, and the overlay *Look here · white plastic nut* on the tight nut. Loosen the second nut. Tap ✓: *Verified*. Progress advances. | Only one nut loosened? Not yet, and here is the fix, with the part outlined. Fix it, check again, pass. | `sam-3.1` then `muse-spark-1.3 · verifier` | C4 |
 | 2:15–2:30 | Fridge gate | Fridge skill, step 1. Plug **still in** the outlet: tap ✓, refused. Plug out, outlet in the same frame: tap ✓, *Verified*. | Same loop, different domain. The fridge skill's gate wants the plug out and the outlet in the same frame. Plug in: refused. Plug out: verified. It never infers what it cannot see. | `muse-spark-1.3 · safety gate` | D1, D2 |
 | 2:30–2:45 | Under the hood | Quick cuts: the README models table; terminal `pytest` → *41 passed*; `git log` with Oct 27 and 28 dates; the Releases page with the APK. | Four Meta models. Muse Spark compiles, guides and verifies with strict JSON schemas. SAM 3.1 finds the part. Voice Transcribe hears you. Muse Image drew the seed reference photos. FastAPI, Expo, forty-one tests, all built this week. | `muse-image-1.0 · seed reference photos` | E1–E4 |
-| 2:45–2:55 | Close | The glasses artboards from `design/` (GlassesStep, GlassesUnclear) pan slowly. End card: Athena · github.com/DenizYunus/athena. | Next: the same session on Ray-Ban Meta glasses, hands free. Athena. Expert know-how, verified by camera. | — | G1, end card |
+| 2:45–2:55 | Close | The glasses artboards from `design/` (GlassesStep, GlassesUnclear) pan slowly, or, if you record it, the session with the Glasses pill on in the emulator (clip G2 in the plan). End card: Athena · github.com/DenizYunus/athena. | The glasses bridge already runs on Meta's mock device kit. Next: real Ray-Ban Meta glasses, hands free. Athena. Expert know-how, verified by camera. | — | G1, end card |
 
 Narration is about 300 words, which is two minutes of speech at a calm pace inside a 2:55 cut. The remaining time is for the phone's own voice (the guide speaking) and short pauses on each verdict. Do not fill the gaps.
 
@@ -46,7 +46,7 @@ Narration is about 300 words, which is two minutes of speech at a calm pace insi
 >
 > Four Meta models. Muse Spark compiles, guides and verifies with strict JSON schemas. SAM 3.1 finds the part. Voice Transcribe hears you. Muse Image drew the seed reference photos. FastAPI, Expo, forty-one tests, all built this week.
 >
-> Next: the same session on Ray-Ban Meta glasses, hands free. Athena. Expert know-how, verified by camera.
+> The glasses bridge already runs on Meta's mock device kit. Next: real Ray-Ban Meta glasses, hands free. Athena. Expert know-how, verified by camera.
 
 ## Text that appears on screen
 

@@ -40,7 +40,7 @@ Structured output is what makes a verification loop trustworthy: a schema with p
 
 ## What's next
 
-The same session on Ray-Ban Meta glasses through the Wearables Device Access Toolkit, hands free, with step cards on Meta Ray-Ban Display. Paid skills with per-completion payouts to the expert. An eval set of real pass, fail and unclear photos per skill.
+The glasses source already runs on Meta's Mock Device Kit (stream, photos for checks, audio push-to-talk, lens cards); next is the same session on real Ray-Ban Meta glasses and Meta Ray-Ban Display, hands free. Paid skills with per-completion payouts to the expert. An eval set of real pass, fail and unclear photos per skill.
 
 ## Built with
 
