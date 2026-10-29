@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -24,6 +25,8 @@ from .schemas import (
     VerifyResponse,
 )
 from .store import SessionStore, SkillStore
+
+log = logging.getLogger("athena")
 
 app = FastAPI(title="Athena", version="0.2.0")
 
@@ -200,13 +203,35 @@ async def session_turn(
     guide_clip = None if audio_only else clip_bytes
 
     async def words() -> str:
-        """The transcript to use: as sent, else transcribed from the clip's audio track."""
+        """The transcript to use: as sent, else transcribed from the clip's audio track.
+
+        A video clip survives a failed transcription (the guide still gets the clip). An audio-only
+        clip does not reach the guide at all, so a failed transcription fails the turn instead of
+        silently dropping the question."""
         if transcript or not clip_bytes:
             return transcript
         try:
             return await asr.transcribe_clip(client.api_key, clip_bytes, skill.vocabulary)
-        except RuntimeError:
-            return ""  # the guide still gets the clip; the model can hear the audio track
+        except RuntimeError as exc:
+            if audio_only:
+                log.warning("transcription of an audio-only clip failed: %s", exc)
+                # Say what to do, without the upstream status code (the app reads a bare 503 as "no API key").
+                reason = str(exc)
+                if isinstance(exc, asr.TranscribeError):
+                    if exc.status in (401, 403):
+                        reason = "the speech service rejected the API key; check it in Settings"
+                    elif exc.status in (400, 413, 415, 422):
+                        reason = "the recording could not be used"
+                    else:
+                        reason = "the speech service did not answer"
+                raise RuntimeError(f"Could not transcribe your question ({reason}). Try again.") from exc
+            return ""
+
+    def nothing_to_answer(heard: str) -> bool:
+        """An audio-only clip with no words and no photo leaves the guide nothing at all."""
+        return audio_only and not heard and not photo_bytes
+
+    NOTHING = "Didn't catch your question: no words were heard and no photo was sent. Try again."
 
     if stream:
         # Events, in order: transcribing (only when the clip's audio is being transcribed),
@@ -219,6 +244,8 @@ async def session_turn(
                 if not transcript and clip_bytes:
                     yield event({"transcribing": True})
                 heard = await words()
+                if nothing_to_answer(heard):
+                    raise RuntimeError(NOTHING)
                 yield event({"transcript": heard})
                 async for delta in guide.turn_stream(client, skill, session, heard, guide_clip, photo_bytes):
                     yield event({"delta": delta})
@@ -228,7 +255,12 @@ async def session_turn(
 
         return StreamingResponse(sse(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-    heard = await words()
+    try:
+        heard = await words()
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    if nothing_to_answer(heard):
+        raise HTTPException(422, NOTHING)
     reply = await guide.turn(client, skill, session, heard, guide_clip, photo_bytes)
     return TurnResponse(reply=reply, transcript=heard, current_step=session.current_step, session_id=session.id)
 
