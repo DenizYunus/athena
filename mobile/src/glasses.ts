@@ -35,6 +35,8 @@ export function useGlasses(options: ConnectOptions): GlassesHook {
   const [frameUri, setFrameUri] = useState<string | null>(null);
   const optionsRef = useRef(options);
   optionsRef.current = options;
+  // Each toggle is one attempt; the outcome of an older attempt is ignored.
+  const attemptRef = useRef(0);
 
   useEffect(() => {
     const native = Glasses;
@@ -54,23 +56,29 @@ export function useGlasses(options: ConnectOptions): GlassesHook {
     };
   }, []);
 
-  const connect = useCallback(async () => {
-    if (!Glasses || !onRef.current) return;
+  // A failure leaves the toggle on with state "error" (pill "Glasses !", message on screen);
+  // the next tap on the pill turns it off. `attempt` is the toggle that scheduled this call: a
+  // timer from an earlier toggle never starts a native connect.
+  const connect = useCallback(async (attempt: number) => {
+    const native = Glasses;
+    const stale = () => attempt !== attemptRef.current || !onRef.current;
+    if (!native || stale()) return;
     if (Platform.OS === "android" && Number(Platform.Version) >= 31 && !optionsRef.current.mock) {
       const r = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT);
+      if (stale()) return;
       if (r !== PermissionsAndroid.RESULTS.GRANTED) {
         setConn((c) => ({ ...c, state: "error", message: "Bluetooth permission is needed to reach the glasses" }));
-        onRef.current = false;
-        setOn(false);
         return;
       }
     }
     try {
-      await Glasses.connect(optionsRef.current);
+      await native.connect(optionsRef.current);
     } catch (e: any) {
-      setConn((c) => ({ ...c, state: "error", message: e?.message ?? String(e) }));
-      onRef.current = false;
-      setOn(false);
+      if (stale()) return;
+      // The native side already reported the error as a connection event; keep that snapshot so
+      // the screen shows the message once, without Expo's "Call to function ... rejected" wrapper.
+      const snap = native.getState();
+      setConn((c) => (snap.state === "error" ? snap : { ...c, state: "error", message: nativeMessage(e) }));
     }
   }, []);
 
@@ -78,10 +86,13 @@ export function useGlasses(options: ConnectOptions): GlassesHook {
     if (!Glasses) return;
     const next = !onRef.current;
     onRef.current = next;
+    attemptRef.current += 1;
     setOn(next);
     if (next) {
+      setConn((c) => ({ ...c, state: "connecting", message: null }));
       // The phone camera view is unmounted first; the Mock Device Kit may feed from that same camera.
-      setTimeout(connect, 350);
+      const attempt = attemptRef.current;
+      setTimeout(() => connect(attempt), 350);
     } else {
       setFrameUri(null);
       Glasses.disconnect().catch(() => {});
@@ -90,7 +101,11 @@ export function useGlasses(options: ConnectOptions): GlassesHook {
 
   const capturePhoto = useCallback(async (): Promise<CapturedPhoto> => {
     if (!Glasses) throw new Error("Glasses are not available in this build");
-    return Glasses.capturePhoto();
+    try {
+      return await Glasses.capturePhoto();
+    } catch (e: any) {
+      throw new Error(nativeMessage(e));
+    }
   }, []);
 
   const showCard = useCallback((card: Card) => {
@@ -112,4 +127,11 @@ export function useGlasses(options: ConnectOptions): GlassesHook {
     capturePhoto,
     showCard,
   };
+}
+
+/** The native error's own text: Expo prefixes it with "Call to function '…' has been rejected. → Caused by:". */
+function nativeMessage(e: any): string {
+  const m = String(e?.message ?? e);
+  const parts = m.split(/Caused by:\s*/);
+  return parts[parts.length - 1].trim() || m;
 }

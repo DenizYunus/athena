@@ -49,13 +49,19 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -82,8 +88,13 @@ class GlassesController(
     const val SDK_VERSION = "1.0.1"
     private const val TAG = "AthenaGlasses"
     private const val CONNECT_TIMEOUT_MS = 30_000L
+    /** How long to wait for a linked pair of glasses (or a freshly paired mock) before giving up. */
+    private const val DEVICE_TIMEOUT_MS = 15_000L
     private const val STREAM_TIMEOUT_MS = 20_000L
     private const val REGISTRATION_TIMEOUT_MS = 180_000L
+    private const val PERMISSION_TIMEOUT_MS = 120_000L
+    /** A stream frame older than this is not used as a photo. */
+    private const val FRESH_FRAME_MS = 3_000L
     private const val PHOTO_MAX_SIDE = 1600
   }
 
@@ -94,25 +105,44 @@ class GlassesController(
 
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private val frameDispatcher = Dispatchers.Default.limitedParallelism(1)
+  /** Serializes connect() / disconnect() / a session ending on its own. */
   private val mutex = Mutex()
+  /** Lens cards go out one at a time, in the order they were asked for (the first one attaches the display). */
+  private val cardMutex = Mutex()
+  /** Guards teardown() and the session fields; teardown() can run from the modules queue, a collector, or OnDestroy. */
+  private val lock = Any()
+  /** Bumped by every teardown(); collectors of an older session stop reporting. */
+  private val generation = AtomicInteger(0)
 
   @Volatile private var state = "idle"
   @Volatile private var message: String? = null
   @Volatile private var options = ConnectOptions()
-  private var mock = false
-  private var deviceName: String? = null
-  private var displayCapable = false
+  @Volatile private var mock = false
+  @Volatile private var deviceName: String? = null
+  @Volatile private var displayCapable = false
   private var initialized = false
 
-  private var session: DeviceSession? = null
-  private var camera: Camera? = null
-  private var stream: Stream? = null
-  private var display: Display? = null
+  @Volatile private var session: DeviceSession? = null
+  @Volatile private var camera: Camera? = null
+  @Volatile private var stream: Stream? = null
+  @Volatile private var display: Display? = null
   private var mockKit: MockDeviceKitInterface? = null
   private var mockGlasses: MockGlasses? = null
-  private val jobs = mutableListOf<Job>()
+  // One selector for the controller's life: each AutoDeviceSelector keeps a collector on the device
+  // list for the life of the process, and the Mock Device Kit only attaches a fake link manager to
+  // the same DeviceManager, so the same selector serves the mock and real glasses.
+  private var selector: AutoDeviceSelector? = null
+  /** Parent of every collector of the current session, cancelled as one in teardown(). */
+  @Volatile private var sessionJob: Job? = null
+  /** Parent of every connect() in flight: disconnect() cancels all of them instead of queueing behind one. */
+  private val connectParent = SupervisorJob(scope.coroutineContext[Job])
+  private val connectScope = CoroutineScope(scope.coroutineContext + connectParent)
+  // connect()'s waits, failed early when the session ends on its own.
+  @Volatile private var pendingStarted: CompletableDeferred<Unit>? = null
+  @Volatile private var pendingStreaming: CompletableDeferred<Unit>? = null
 
   @Volatile private var latest: VideoFrame? = null
+  @Volatile private var lastFrameAt = 0L
   @Volatile private var lastPreviewAt = 0L
   @Volatile private var frameCount = 0L
 
@@ -131,11 +161,40 @@ class GlassesController(
   private fun registrationName(): String =
     if (!initialized) "uninitialized" else runCatching { Wearables.registrationState.value.name.lowercase() }.getOrDefault("unknown")
 
+  // State changes and the events reporting them happen under one lock, so JS receives them in the
+  // order they happened. emit() only hands the event to the JS runtime and never calls back in.
   private fun setState(next: String, note: String? = null) {
-    Log.i(TAG, "state $state -> $next${note?.let { " ($it)" } ?: ""}")
-    state = next
-    message = note
-    emit("connection", snapshot())
+    synchronized(lock) {
+      Log.i(TAG, "state $state -> $next${note?.let { " ($it)" } ?: ""}")
+      state = next
+      message = note
+      emit("connection", snapshot())
+    }
+  }
+
+  /**
+   * A state change reported by a collector of session [gen]. Checked and written under the same lock
+   * teardown() bumps the generation under, so a collector of a torn-down session can never overwrite
+   * the state that disconnect() or the next connect() set. [onlyIf] sees the current state.
+   */
+  private fun setStateFor(gen: Int, next: String, note: String? = null, onlyIf: (String) -> Boolean = { true }): Boolean {
+    synchronized(lock) {
+      if (gen != generation.get() || !onlyIf(state)) return false
+      Log.i(TAG, "state $state -> $next${note?.let { " ($it)" } ?: ""}")
+      state = next
+      message = note
+      emit("connection", snapshot())
+    }
+    return true
+  }
+
+  /** A non-fatal note from a collector of session [gen] (a session or stream error), reported as is. */
+  private fun noteFor(gen: Int, note: String) {
+    synchronized(lock) {
+      if (gen != generation.get()) return
+      message = note
+      emit("connection", snapshot())
+    }
   }
 
   private fun <T, E : DatError> DatResult<T, E>.orThrow(what: String): T =
@@ -143,19 +202,40 @@ class GlassesController(
 
   // ------------------------------------------------------------------ connect / disconnect
 
-  suspend fun connect(opts: ConnectOptions): Map<String, Any?> = mutex.withLock {
-    if (state == "streaming" || state == "connected" || state == "paused") return snapshot()
+  suspend fun connect(opts: ConnectOptions): Map<String, Any?> {
+    // Runs outside the caller so disconnect() can cancel it. A Deferred that is cancelled before it
+    // even starts still completes, so the JS promise always settles.
+    val attempt = connectScope.async { mutex.withLock { doConnect(opts) } }
+    try {
+      return attempt.await()
+    } catch (e: CancellationException) {
+      currentCoroutineContext().ensureActive() // the caller itself was cancelled: let that propagate
+      throw GlassesException("Glasses connection cancelled")
+    }
+  }
+
+  private suspend fun doConnect(opts: ConnectOptions): Map<String, Any?> {
+    // Already connected: only when a session is really alive, so a stale state cannot turn this
+    // connect into a silent no-op. The event replaces the "connecting" the JS side shows meanwhile.
+    if (session != null && (state == "streaming" || state == "connected" || state == "paused")) {
+      synchronized(lock) { emit("connection", snapshot()) }
+      return snapshot()
+    }
     options = opts
     mock = opts.mock
     setState("connecting")
     try {
       ensureInitialized()
       ensureRegistered()
+      if (state == "registering") setState("connecting") // approved in Meta AI; now waiting for the glasses
       val s = openSession()
       ensureCameraPermission()
+      if (state == "permission") setState("connected") // camera allowed; starting the stream
       startStream(s)
-      snapshot()
+      return snapshot()
     } catch (e: CancellationException) {
+      teardown()
+      setState("idle")
       throw e
     } catch (e: Exception) {
       Log.e(TAG, "connect failed", e)
@@ -166,14 +246,21 @@ class GlassesController(
     }
   }
 
-  suspend fun disconnect() = mutex.withLock {
-    teardown()
-    setState("idle")
+  suspend fun disconnect() {
+    connectParent.cancelChildren()
+    mutex.withLock {
+      try {
+        teardown()
+      } finally {
+        setState("idle")
+      }
+    }
   }
 
   fun shutdown() {
-    teardown()
+    connectParent.cancelChildren()
     scope.cancel()
+    teardown()
   }
 
   private fun ensureInitialized() {
@@ -235,36 +322,69 @@ class GlassesController(
     when {
       outcome == null && Wearables.registrationState.value == RegistrationState.REGISTERED -> return
       outcome == null -> throw GlassesException("Registration with the Meta AI app did not complete. Install Meta AI (V292 or newer), turn on Developer Mode under Settings > App Info, and try again.")
+      outcome.contains("META_AI_NOT_INSTALLED") ->
+        throw GlassesException("The Meta AI app is not installed. Install Meta AI (V292 or newer), pair the glasses there and turn on Developer Mode, then try again.")
       else -> throw GlassesException("Registration failed: $outcome")
     }
   }
 
   private suspend fun openSession(): DeviceSession {
-    val s = Wearables.createSession(AutoDeviceSelector()).orThrow("No glasses to connect to")
-    session = s
+    // A device shows up a moment after pairing (the mock) or after the Bluetooth link comes up
+    // (real glasses); creating the session before that fails with "No eligible device".
+    val sel = this.selector ?: AutoDeviceSelector().also { this.selector = it }
+    if (sel.activeDevice() == null) {
+      withTimeoutOrNull(DEVICE_TIMEOUT_MS) { sel.activeDeviceFlow().first { it != null } }
+        ?: throw GlassesException(
+          if (mock) "The mock glasses did not come up"
+          else "No glasses connected. Check that they are on, unfolded, worn, and paired in the Meta AI app",
+        )
+    }
+    val s = Wearables.createSession(sel).orThrow("No glasses to connect to")
+    val parent = SupervisorJob(scope.coroutineContext[Job])
     val started = CompletableDeferred<Unit>()
-    jobs += scope.launch {
+    val gen = synchronized(lock) {
+      session = s
+      sessionJob = parent
+      pendingStarted = started
+      generation.get()
+    }
+    val sessionScope = CoroutineScope(scope.coroutineContext + parent)
+    // UNDISPATCHED: subscribed before s.start(), which reports preflight failures synchronously
+    // on a SharedFlow without replay.
+    sessionScope.launch(start = CoroutineStart.UNDISPATCHED) {
       s.errors.collect { error ->
         Log.w(TAG, "session error: ${error.description}")
-        message = error.description
+        if (gen != generation.get()) return@collect
         if (!started.isCompleted) started.completeExceptionally(GlassesException("Session: ${error.description}"))
-        else emit("connection", snapshot())
+        else noteFor(gen, error.description)
       }
     }
-    jobs += scope.launch {
+    sessionScope.launch(start = CoroutineStart.UNDISPATCHED) {
       s.state.collect { st ->
+        if (gen != generation.get()) return@collect
         when (st) {
           DeviceSessionState.STARTED -> {
             val info = s.deviceInfo.value
             deviceName = info.name
             displayCapable = info.isDisplayCapable()
             if (!started.isCompleted) started.complete(Unit)
-            if (state == "connecting") setState("connected")
+            setStateFor(gen, "connected") { it == "connecting" }
           }
-          DeviceSessionState.PAUSED -> if (state == "streaming" || state == "connected") setState("paused")
+          DeviceSessionState.PAUSED -> setStateFor(gen, "paused") { it == "streaming" || it == "connected" }
           DeviceSessionState.STOPPED -> {
-            if (!started.isCompleted) started.completeExceptionally(GlassesException("The glasses session stopped before it started"))
-            else onSessionStopped()
+            val note = message
+            // Fail the waits of a connect() in flight right away, then tear down under the mutex
+            // (connect() may still hold it; by the time this runs it has cleaned up itself).
+            started.completeExceptionally(GlassesException("The glasses session ended: ${note ?: "disconnected"}"))
+            pendingStreaming?.completeExceptionally(GlassesException("The glasses session ended: ${note ?: "disconnected"}"))
+            scope.launch {
+              mutex.withLock {
+                if (session === s) {
+                  teardown()
+                  setState("disconnected", note)
+                }
+              }
+            }
           }
           else -> Unit
         }
@@ -281,7 +401,8 @@ class GlassesController(
     if (status == PermissionStatus.Granted) return
     val launcher = permissionLauncher ?: throw GlassesException("Permission launcher not registered")
     setState("permission")
-    val result = withContext(Dispatchers.Main) { launcher.launch(Permission.CAMERA) }
+    val result = withTimeoutOrNull(PERMISSION_TIMEOUT_MS) { withContext(Dispatchers.Main) { launcher.launch(Permission.CAMERA) } }
+      ?: throw GlassesException("No answer from the Meta AI app to the camera permission request")
     if (result != "granted") throw GlassesException("Camera access was not granted in the Meta AI app ($result)")
   }
 
@@ -293,30 +414,40 @@ class GlassesController(
     }
     val fps = listOf(2, 7, 15, 24, 30).minByOrNull { kotlin.math.abs(it - options.frameRate) } ?: 15
     val cam = s.addCamera(StreamConfiguration(videoQuality = quality, frameRate = fps, compressVideo = false)).orThrow("Camera")
-    camera = cam
     val st = cam.stream
-    stream = st
     val streaming = CompletableDeferred<Unit>()
-    jobs += scope.launch(frameDispatcher) { st.videoStream.collect { onFrame(it) } }
-    jobs += scope.launch {
+    val (parent, gen) = synchronized(lock) {
+      if (session !== s) throw GlassesException("The glasses session ended")
+      camera = cam
+      stream = st
+      pendingStreaming = streaming
+      (sessionJob ?: throw GlassesException("The glasses session ended")) to generation.get()
+    }
+    val streamScope = CoroutineScope(scope.coroutineContext + parent)
+    streamScope.launch(frameDispatcher) { st.videoStream.collect { if (gen == generation.get()) onFrame(it) } }
+    // UNDISPATCHED for the same reason: st.start() can emit CRITICAL_STREAM_ERROR before returning.
+    streamScope.launch(start = CoroutineStart.UNDISPATCHED) {
       st.errorStream.collect { error ->
         Log.w(TAG, "stream error: ${error.description}")
-        message = error.description
+        if (gen != generation.get()) return@collect
         val fatal = error == StreamError.CRITICAL_STREAM_ERROR || error == StreamError.PERMISSIONS_DENIED
         if (!streaming.isCompleted && fatal) streaming.completeExceptionally(GlassesException("Stream: ${error.description}"))
-        else emit("connection", snapshot())
+        else noteFor(gen, error.description)
       }
     }
-    jobs += scope.launch {
+    streamScope.launch(start = CoroutineStart.UNDISPATCHED) {
       st.state.collect { sst ->
+        if (gen != generation.get()) return@collect
         when (sst) {
           StreamState.STREAMING -> {
             if (!streaming.isCompleted) streaming.complete(Unit)
-            setState("streaming")
+            setStateFor(gen, "streaming")
           }
-          StreamState.PAUSED -> setState("paused", "paused from the glasses (tap the touchpad to resume)")
+          StreamState.PAUSED -> setStateFor(gen, "paused", "paused from the glasses (tap the touchpad to resume)")
           StreamState.STOPPED, StreamState.CLOSED ->
-            if (streaming.isCompleted && (state == "streaming" || state == "paused")) setState("connected", "stream stopped")
+            if (streaming.isCompleted && setStateFor(gen, "connected", "stream stopped", onlyIf = { it == "streaming" || it == "paused" })) {
+              latest = null
+            }
           else -> Unit
         }
       }
@@ -326,26 +457,27 @@ class GlassesController(
       ?: throw GlassesException("The glasses camera did not start streaming")
   }
 
-  private fun onSessionStopped() {
-    if (state == "idle") return
-    val note = message
-    teardown()
-    setState("disconnected", note)
-  }
-
+  /** Stops everything of the current session. Safe from any thread; later calls are no-ops. */
   private fun teardown() {
-    jobs.forEach { it.cancel() }
-    jobs.clear()
-    runCatching { display?.stop() }
-    display = null
-    runCatching { camera?.stop() } // cascades to the stream
-    camera = null
-    stream = null
-    latest = null
-    runCatching { session?.stop() }
-    session = null
-    deviceName = null
-    displayCapable = false
+    synchronized(lock) {
+      generation.incrementAndGet()
+      sessionJob?.cancel()
+      sessionJob = null
+      pendingStarted?.completeExceptionally(GlassesException("Glasses disconnected"))
+      pendingStarted = null
+      pendingStreaming?.completeExceptionally(GlassesException("Glasses disconnected"))
+      pendingStreaming = null
+      runCatching { display?.stop() }
+      display = null
+      runCatching { camera?.stop() } // cascades to the stream
+      camera = null
+      stream = null
+      latest = null
+      runCatching { session?.stop() }
+      session = null
+      deviceName = null
+      displayCapable = false
+    }
   }
 
   fun handleIntent(intent: Intent) {
@@ -364,6 +496,7 @@ class GlassesController(
     val h = frame.height
     if (w <= 0 || h <= 0 || frame.buffer.remaining() < w * h * 3 / 2) return
     latest = frame
+    lastFrameAt = SystemClock.elapsedRealtime()
     if (frameCount == 0L) Log.i(TAG, "first decoded frame ${w}x$h (${frame.buffer.remaining()} bytes, layout ${options.yuv})")
     frameCount++
     val now = SystemClock.elapsedRealtime()
@@ -393,15 +526,15 @@ class GlassesController(
 
   suspend fun capturePhoto(): Map<String, Any?> {
     val st = stream
+    if (st == null || !(state == "streaming" || state == "paused")) throw GlassesException("No photo: the glasses are not streaming")
     var failure: String? = null
     var bitmap: Bitmap? = null
-    if (st != null && (state == "streaming" || state == "paused")) {
+    run {
       bitmap = st.capturePhoto().fold(
         { data ->
           when (data) {
             is PhotoData.Bitmap -> data.bitmap
             is PhotoData.HEIC -> decodeWithOrientation(data.data)
-            else -> null
           }
         },
         { error, _ ->
@@ -416,7 +549,11 @@ class GlassesController(
       withContext(Dispatchers.IO) { FileOutputStream(file).use { scaled.compress(Bitmap.CompressFormat.JPEG, 90, it) } }
       return mapOf("uri" to Uri.fromFile(file).toString(), "width" to scaled.width, "height" to scaled.height, "source" to "glasses", "note" to null)
     }
-    val frame = latest ?: throw GlassesException(failure?.let { "No photo: $it" } ?: "No photo: the glasses are not streaming")
+    // Fall back to the latest stream frame, but only a live one: a frame from before a pause or
+    // stop must not be passed off as a fresh photo.
+    val frame = latest
+    val fresh = frame != null && state == "streaming" && SystemClock.elapsedRealtime() - lastFrameAt < FRESH_FRAME_MS
+    if (frame == null || !fresh) throw GlassesException(failure?.let { "No photo: $it" } ?: "No photo: no recent frame from the glasses")
     val jpeg = withContext(frameDispatcher) { Yuv.toJpeg(frame.buffer, frame.width, frame.height, options.yuv, 1, 90) }
     withContext(Dispatchers.IO) { file.writeBytes(jpeg.bytes) }
     return mapOf("uri" to Uri.fromFile(file).toString(), "width" to jpeg.width, "height" to jpeg.height, "source" to "frame", "note" to failure)
@@ -461,7 +598,9 @@ class GlassesController(
   // ------------------------------------------------------------------ display cards
 
   /** Sends one card to the glasses display; false when the glasses have no display or nothing is connected. */
-  suspend fun showCard(card: CardOptions): Boolean {
+  suspend fun showCard(card: CardOptions): Boolean = cardMutex.withLock { sendCard(card) }
+
+  private suspend fun sendCard(card: CardOptions): Boolean {
     val s = session ?: return false
     if (!displayCapable) return false
     val d = display ?: attachDisplay(s) ?: return false
@@ -474,15 +613,18 @@ class GlassesController(
         if (bitmap != null) image(uri = null, bitmap = bitmap, sizePreset = ImageSize.FILL, cornerRadius = CornerRadius.MEDIUM)
         if (card.hint.isNotBlank()) text(card.hint, style = TextStyle.META, color = TextColor.SECONDARY)
       }
-    }.fold({ it }, { error, _ ->
+    }.fold({ sent ->
+      Log.i(TAG, "card \"${card.title.take(40)}\" sent=$sent")
+      sent
+    }, { error, _ ->
       Log.w(TAG, "sendContent: ${error.description}")
       false
     })
   }
 
-  suspend fun clearCard(): Boolean {
-    val d = display ?: return false
-    return d.clearDisplay().fold({ it }, { _, _ -> false })
+  suspend fun clearCard(): Boolean = cardMutex.withLock {
+    val d = display ?: return@withLock false
+    d.clearDisplay().fold({ it }, { _, _ -> false })
   }
 
   private suspend fun attachDisplay(s: DeviceSession): Display? {
@@ -490,9 +632,26 @@ class GlassesController(
       Log.w(TAG, "addDisplay: ${error.description}")
       null
     }) ?: return null
-    display = d
-    if (withTimeoutOrNull(10_000) { d.state.first { it == DisplayState.STARTED } } == null) {
-      Log.w(TAG, "display did not reach STARTED")
+    // Publish it only for the session it belongs to; teardown() may have ended that session meanwhile.
+    val current = synchronized(lock) { if (session === s) { display = d; true } else false }
+    if (!current) {
+      runCatching { d.stop() }
+      return null
+    }
+    // A new Display starts out STOPPED and moves to STARTING later on the toolkit's IO thread, so
+    // STOPPED means "failed" only after it has left that initial state; CLOSED is final either way.
+    var left = false
+    val reached = withTimeoutOrNull(10_000) {
+      d.state.first { st ->
+        if (st != DisplayState.STOPPED) left = true
+        st == DisplayState.STARTED || st == DisplayState.CLOSED || (left && st == DisplayState.STOPPED)
+      }
+    }
+    if (reached != DisplayState.STARTED) {
+      Log.w(TAG, "display did not start ($reached)")
+      synchronized(lock) { if (display === d) display = null }
+      runCatching { d.stop() }
+      return null
     }
     return d
   }
