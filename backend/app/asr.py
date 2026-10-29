@@ -26,8 +26,30 @@ from .config import settings
 REALTIME_URL = "wss://api.meta.ai/v1/asr/realtime"
 
 
+class TranscribeError(RuntimeError):
+    """The speech service failed. `status` is its HTTP status, or None for a network or format failure."""
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
+
 def ffmpeg_available() -> bool:
     return shutil.which(settings.ffmpeg_bin) is not None
+
+
+def is_audio_only(content_type: str | None, data: bytes) -> bool:
+    """True for a clip that carries sound but no picture: a glasses turn records the
+    question with the phone (or glasses) microphone as m4a/wav and sends the view as a photo.
+    Decided from the upload's content type, else from the file header."""
+    if (content_type or "").lower().startswith("audio/"):
+        return True
+    head = data[:16]
+    if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+        return True
+    if head[4:8] == b"ftyp" and head[8:12] in (b"M4A ", b"M4B "):
+        return True
+    return head[:3] == b"ID3"
 
 
 async def media_to_wav(data: bytes, sample_rate: int = 16000) -> bytes:
@@ -55,18 +77,24 @@ async def transcribe_wav(api_key: str, wav: bytes, keywords: list[str] | None = 
     request = {"model": settings.asr_model, "audioEncoding": "WAV", "mode": "PUSH_TO_TALK"}
     if keywords:
         request["keywords"] = keywords[:50]
-    async with httpx.AsyncClient(timeout=60) as http:
-        resp = await http.post(
-            f"{settings.base_url}/asr/transcribe",
-            headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
-            files={
-                "request": (None, json.dumps(request), "application/json"),
-                "audio": ("clip.wav", wav, "audio/wav"),
-            },
-        )
+    try:
+        async with httpx.AsyncClient(timeout=60) as http:
+            resp = await http.post(
+                f"{settings.base_url}/asr/transcribe",
+                headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+                files={
+                    "request": (None, json.dumps(request), "application/json"),
+                    "audio": ("clip.wav", wav, "audio/wav"),
+                },
+            )
+    except httpx.HTTPError as exc:  # timeouts, refused connections: same contract as a bad status
+        raise TranscribeError(f"transcribe failed: {exc!r}") from exc
     if resp.status_code != 200:
-        raise RuntimeError(f"transcribe failed ({resp.status_code}): {resp.text[:300]}")
-    return (resp.json().get("transcript") or "").strip()
+        raise TranscribeError(f"transcribe failed ({resp.status_code}): {resp.text[:300]}", resp.status_code)
+    try:
+        return (resp.json().get("transcript") or "").strip()
+    except ValueError as exc:
+        raise TranscribeError(f"transcribe failed: not JSON: {resp.text[:200]}") from exc
 
 
 async def transcribe_clip(api_key: str, media: bytes, keywords: list[str] | None = None) -> str:
