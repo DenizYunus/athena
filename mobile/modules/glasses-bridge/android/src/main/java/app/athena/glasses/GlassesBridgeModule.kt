@@ -19,7 +19,7 @@ class GlassesBridgeModule : Module() {
 
     Events("connection", "frame")
 
-    Constants("sdkVersion" to GlassesController.SDK_VERSION)
+    Constant("sdkVersion") { GlassesController.SDK_VERSION }
 
     Function("getState") { controller.snapshot() }
 
