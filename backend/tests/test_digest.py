@@ -6,10 +6,13 @@ frames and clips all run for real; only the Meta API is the fake from conftest.
 
 from __future__ import annotations
 
+import array
+import asyncio
 import copy
 import io
 import json
 import logging
+import math
 import re
 import shutil
 import subprocess
@@ -23,7 +26,7 @@ import pytest
 from fastapi import UploadFile
 from PIL import Image, ImageStat
 
-from app import digest, store
+from app import asr, digest, store
 from app.config import settings
 from app.prompts import guide_system_prompt, verify_system_prompt
 from app.schemas import Skill, Step
@@ -436,6 +439,306 @@ def test_portrait_video_stays_portrait(app_client, fake_client, videos, workdirs
     [video] = [s for s in _probe(tmp_path / step["clip"])["streams"] if s["codec_type"] == "video"]
     assert video["height"] > video["width"]
     assert video["width"] % 2 == 0 and video["height"] % 2 == 0
+
+
+# ---------------------------------------------------------------- the narration
+
+
+def _sentences(*rows):
+    async def transcribe_turns(api_key, wav, timeout=180.0):
+        return [asr.Turn(a, b, text) for a, b, text in rows]
+
+    return transcribe_turns
+
+
+def _first_loud_second(wav: bytes) -> float | None:
+    """Where the beep starts in a 16 kHz mono 16-bit WAV. ffmpeg writes it to a pipe, so the header's sizes are unknown."""
+    i = wav.find(b"data") + 8
+    pcm = array.array("h", wav[i : i + (len(wav) - i) // 2 * 2])
+    return next((k / 16000 for k, v in enumerate(pcm) if abs(v) > 3000), None)
+
+
+@pytest.fixture(scope="session")
+def beeps(videos, tmp_path_factory) -> dict[str, Path]:
+    """12 s of picture with a 0.3 s beep at second 7: once with sound from second 0, once with the
+    sound track starting 2 s late, as an edited export can have."""
+    d = tmp_path_factory.mktemp("beeps")
+    pattern = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:duration=12"]
+    enc = ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac"]
+    beep = "aevalsrc='if(between(t,{0},{0}+0.3),0.5*sin(2*PI*1000*t),0)':s=48000:d={1}"
+    _ffmpeg(*pattern, "-f", "lavfi", "-i", beep.format(7, 12), *enc, "-shortest", str(d / "beep.mp4"))
+    _ffmpeg(*pattern, "-itsoffset", "2", "-f", "lavfi", "-i", beep.format(5, 10), "-map", "0:v", "-map", "1:a", *enc, str(d / "late.mp4"))
+    return {p.stem: p for p in d.iterdir()}
+
+
+def _digest_input(src: Path, tmp_path: Path) -> digest.DigestInput:
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    video = workdir / "upload.mp4"
+    shutil.copy(src, video)
+    return digest.DigestInput(workdir=workdir, video=video)
+
+
+def _speech_that_never_answers(monkeypatch, inp: digest.DigestInput) -> dict:
+    """Records when it is asked, and whether the workdir was still there when it was cancelled."""
+    state = {"asked": asyncio.Event(), "cancelled": False, "workdir_then": None}
+
+    async def transcribe_turns(api_key, wav, timeout=180.0):
+        state["asked"].set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            state["cancelled"] = True
+            state["workdir_then"] = inp.workdir.exists()
+            raise
+        return []
+
+    monkeypatch.setattr(asr, "transcribe_turns", transcribe_turns)
+    return state
+
+
+def test_parse_turns_keeps_timed_sentences_in_order():
+    data = {
+        "transcript": "Welcome. centrifugal pumps are used",
+        "turns": [
+            {"turnId": 2, "startMs": 5900, "endMs": 14780, "transcript": " centrifugal pumps are used "},
+            {"turnId": 1, "startMs": 0, "endMs": 5180, "transcript": "Welcome."},
+            {"turnId": 3, "startMs": 15000, "endMs": 15500, "transcript": "  "},
+            {"turnId": 4, "endMs": 16000, "transcript": "no start"},
+            {"turnId": 5, "startMs": "soon", "transcript": "no number"},
+            {"turnId": 6, "startMs": 17000, "endMs": 16000, "transcript": "ends before it starts"},
+            {"turnId": 7, "startMs": 2000, "transcript": "no end"},
+            {"turnId": 8, "startMs": 1000, "endMs": None, "transcript": "a null end"},
+            {"turnId": 9, "startMs": -40, "endMs": 900, "transcript": "before the audio"},
+            {"turnId": 10, "startMs": float("nan"), "endMs": 900, "transcript": "not a time"},
+            "not a turn",
+        ],
+    }
+    assert asr.parse_turns(data) == [
+        asr.Turn(0.0, 5.18, "Welcome."),
+        asr.Turn(1.0, 1.0, "a null end"),
+        asr.Turn(2.0, 2.0, "no end"),
+        asr.Turn(5.9, 14.78, "centrifugal pumps are used"),
+        asr.Turn(17.0, 17.0, "ends before it starts"),
+    ]
+    # PUSH_TO_TALK answers carry no turns; neither does anything that is not an object.
+    assert asr.parse_turns({"transcript": "Welcome."}) == []
+    assert asr.parse_turns({"turns": "none"}) == []
+    assert asr.parse_turns([]) == []
+
+
+def test_narration_text_lists_what_starts_in_the_span_and_marks_cut_lines():
+    turns = [
+        asr.Turn(1.0, 2.5, "loosen the bolt"),
+        asr.Turn(3.0, 4.2, "barely across"),
+        asr.Turn(3.5, 4.6, "across the cut"),
+        asr.Turn(6.0, 9.0, "into the next part"),
+        asr.Turn(8.0, 8.0, "a click on the edge"),
+        asr.Turn(9.0, 10.0, "later"),
+    ]
+    part = digest.narration_text(turns, (4.0, 8.0))
+    assert "- 0.0 to 0.6 (began before this part): across the cut" in part
+    assert "- 2.0 to 4.0 (goes on after this part): into the next part" in part
+    # 0.2 s of it is inside; a sentence that starts on the next part's first second is the next part's.
+    assert "barely across" not in part and "a click" not in part
+    assert "loosen" not in part and "later" not in part
+    assert "counted from the start of this part" in part and "cut at the part's edge" in part
+    following = digest.narration_text(turns, (8.0, 12.0))
+    assert "- 0.0 to 1.0 (began before this part): into the next part" in following
+    assert "- 0.0 to 0.0: a click on the edge" in following
+    whole = digest.narration_text(turns, None)
+    assert "- 1.0 to 2.5: loosen the bolt\n- 3.0 to 4.2: barely across" in whole and "- 9.0 to 10.0: later" in whole
+    assert "counted from the start of the video" in whole
+    assert "began before" not in whole and "part's edge" not in whole
+    assert digest.narration_text(turns[:1], (5.0, 8.0)) is None
+    assert digest.narration_text([], None) is None
+
+
+@pytest.mark.parametrize("name", ["beep", "late"])
+@pytest.mark.parametrize("piece_s, requests, heard_by", [(5.0, 3, 2), (60.0, 1, 1)])
+async def test_each_narration_request_hears_its_own_seconds(beeps, tmp_path, monkeypatch, name, piece_s, requests, heard_by):
+    monkeypatch.setattr(settings, "digest_narration_piece_s", piece_s)
+    monkeypatch.setattr(digest, "NARRATION_OVERLAP_S", 1.0)
+    found: list[float | None] = []
+
+    async def transcribe_turns(api_key, wav, timeout=180.0):
+        assert wav[:4] == b"RIFF" and wav[8:12] == b"WAVE"
+        at = _first_loud_second(wav)
+        found.append(at)
+        return [] if at is None else [asr.Turn(at, at + 0.3, "beep")]
+
+    monkeypatch.setattr(asr, "transcribe_turns", transcribe_turns)
+    video = tmp_path / "video.mp4"
+    await digest.normalize(beeps[name], video, 12.0)
+    heard = await digest.narration("the-key", video, await digest.probe(video))
+    # Pieces of 4 s, each heard with 1 s more on either side: the second and third requests both hear
+    # the beep, and only the piece it starts in keeps it. The late sound track is padded, not shifted.
+    assert len(found) == requests and sum(at is not None for at in found) == heard_by
+    [beep] = heard
+    assert beep.text == "beep" and abs(beep.start - 7.0) < 0.05
+
+
+@pytest.mark.parametrize("piece_s", [0.0, -3.0, 10_000.0, float("nan")])
+async def test_a_bad_piece_setting_cannot_stop_the_digest(videos, monkeypatch, speech_turns, piece_s):
+    monkeypatch.setattr(settings, "digest_narration_piece_s", piece_s)
+    info = await digest.probe(videos["land"])
+    assert await digest.narration("the-key", videos["land"], info) == []
+    if piece_s != piece_s:  # NaN: no pieces can be planned, so no narration
+        assert speech_turns == []
+    elif piece_s > 0:  # one request, never more than the service takes
+        assert len(speech_turns) == 1
+    else:  # pieces of one second
+        assert len(speech_turns) == math.ceil(info.duration - 1e-9)
+
+
+async def test_no_narration_for_a_silent_video_without_a_key_or_when_it_is_off(videos, monkeypatch, speech_turns):
+    asked: list[str] = []
+    real_run = digest._run
+
+    async def spy(args, timeout, what):
+        asked.append(what)
+        return await real_run(args, timeout, what)
+
+    monkeypatch.setattr(digest, "_run", spy)
+    silent = await digest.probe(videos["silent"])
+    assert await digest.narration("the-key", videos["silent"], silent) == []
+    land = await digest.probe(videos["land"])
+    assert await digest.narration("", videos["land"], land) == []
+    monkeypatch.setattr(settings, "digest_narration", False)
+    assert await digest.narration("the-key", videos["land"], land) == []
+    assert speech_turns == [] and "read the narration" not in asked
+
+
+def test_single_pass_reader_hears_the_sentences_right_after_the_video(app_client, fake_client, videos, workdirs, monkeypatch):
+    keys: list[str] = []
+
+    async def transcribe_turns(api_key, wav, timeout=180.0):
+        keys.append(api_key)
+        return [asr.Turn(1.0, 2.5, "first loosen the bolt"), asr.Turn(4.0, 5.2, "then lift the cover")]
+
+    monkeypatch.setattr(asr, "transcribe_turns", transcribe_turns)
+    job = _wait(app_client, _post(app_client, videos["land"], docs=[("spec.pdf", PDF, "application/pdf")]).json()["id"])
+    assert job["status"] == "done", job
+    assert keys == [fake_client.api_key]
+    [video_id] = [u["id"] for u in fake_client.uploads if u["mime"] == "video/mp4"]
+    [pdf_id] = [u["id"] for u in fake_client.uploads if u["mime"] == "application/pdf"]
+    [call] = _digest_calls(fake_client, "DigestedSkill")
+    content = call["input"][-1]["content"]
+    [i] = [i for i, b in enumerate(content) if b["type"] == "input_text" and "speech recognition" in b["text"]]
+    # The video, then what is said in it, then the PDF.
+    assert content[i - 1] == {"type": "input_file", "file_id": video_id}
+    assert [b["file_id"] for b in content[i + 1:] if b["type"] == "input_file"] == [pdf_id]
+    said = content[i]["text"]
+    assert "- 1.0 to 2.5: first loosen the bolt\n- 4.0 to 5.2: then lift the cover" in said
+    assert "counted from the start of the video" in said
+    assert "sentences come with their times" in call["input"][0]["content"]
+
+
+def test_each_part_reader_hears_only_its_part_and_the_merge_none(app_client, fake_client, videos, workdirs, monkeypatch):
+    monkeypatch.setattr(settings, "digest_chunk_s", 5.0)
+    monkeypatch.setattr(
+        asr, "transcribe_turns", _sentences((1.0, 2.0, "mark the casing"), (3.5, 5.0, "across the cut"), (9.0, 10.5, "tighten the bolts"))
+    )
+
+    def chunk_answer(kwargs):
+        part = int(re.search(r"This is part (\d) of 3", kwargs["input"][-1]["content"][0]["text"]).group(1))
+        step = {
+            "action": f"Work on part {part}.", "visible_result": "Done.", "spoken_details": "", "safety": "",
+            "start_s": 0, "end_s": 1, "frame_s": 1, "tools": [], "parts": [],
+        }
+        return json.dumps({"steps": [step], "summary": f"Part {part}."})
+
+    fake_client.next_chunk_outputs = chunk_answer
+    job = _wait(app_client, _post(app_client, videos["long"]).json()["id"])
+    assert job["status"] == "done", job
+    third = job["video_seconds"] / 3
+    heard = {}
+    for call in _digest_calls(fake_client, "DigestChunk"):
+        content = call["input"][-1]["content"]
+        part = int(re.search(r"This is part (\d) of 3", content[0]["text"]).group(1))
+        [video_id] = _file_ids(call)
+        [i] = [i for i, b in enumerate(content) if b["type"] == "input_text" and "speech recognition" in b["text"]]
+        # Right after the part's own video.
+        assert content[i - 1] == {"type": "input_file", "file_id": video_id}
+        heard[part] = content[i]["text"]
+        assert "sentences come with their times" in call["input"][0]["content"]
+    assert "- 1.0 to 2.0: mark the casing" in heard[1]
+    assert f"- 3.5 to {third:.1f} (goes on after this part): across the cut" in heard[1]
+    assert "tighten the bolts" not in heard[1]
+    assert f"- 0.0 to {5.0 - third:.1f} (began before this part): across the cut" in heard[2]
+    assert "mark the casing" not in heard[2] and "tighten the bolts" not in heard[2]
+    assert f"- {9.0 - 2 * third:.1f} to {10.5 - 2 * third:.1f}: tighten the bolts" in heard[3]
+    assert "counted from the start of this part" in heard[3]
+    [merge] = _digest_calls(fake_client, "DigestedSkill")
+    assert not any("speech recognition" in t for t in _texts(merge))
+
+
+def test_a_failed_speech_service_does_not_fail_the_digest(app_client, fake_client, videos, workdirs, monkeypatch, caplog):
+    async def busy(api_key, wav, timeout=180.0):
+        raise asr.TranscribeError("transcribe failed (503): busy", 503)
+
+    monkeypatch.setattr(asr, "transcribe_turns", busy)
+    with caplog.at_level(logging.WARNING, logger="athena"):
+        job = _wait(app_client, _post(app_client, videos["land"]).json()["id"])
+    assert job["status"] == "done", job
+    [call] = _digest_calls(fake_client, "DigestedSkill")
+    assert not any("speech recognition" in t for t in _texts(call))
+    assert "digest narration skipped" in caplog.text
+
+
+async def test_a_failed_upload_stops_the_narration_before_the_workdir_goes(fake_client, videos, tmp_path, monkeypatch):
+    inp = _digest_input(videos["land"], tmp_path)
+    state = _speech_that_never_answers(monkeypatch, inp)
+
+    async def refused(client, path, name, mime, uploaded):
+        await asyncio.wait_for(state["asked"].wait(), 10)
+        raise api_status_error(openai.RateLimitError, 429)
+
+    monkeypatch.setattr(digest, "_upload", refused)
+    job = _new_job()
+    await digest.run_job(job, fake_client, inp, lambda skill, media: skill, lambda exc: "failed")
+    assert job.status == "failed"
+    # digest() waited for the narration to stop, so it stopped before run_job removed the workdir.
+    assert state["cancelled"] and state["workdir_then"] is True
+    assert not inp.workdir.exists()
+
+
+async def test_a_failed_cut_stops_the_narration_that_started_before_it(fake_client, videos, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "digest_chunk_s", 5.0)
+    inp = _digest_input(videos["long"], tmp_path)
+    state = _speech_that_never_answers(monkeypatch, inp)
+
+    async def failing_cut(src, dst, start, length, vf=None, crf=28):
+        # The speech service is asked while the parts are cut, not after.
+        await asyncio.wait_for(state["asked"].wait(), 10)
+        raise digest.BackendTimeout("The backend took too long to cut the video. Try again, or use a shorter video.")
+
+    monkeypatch.setattr(digest, "cut", failing_cut)
+    job = _new_job()
+    await digest.run_job(job, fake_client, inp, lambda skill, media: skill, str)
+    assert job.status == "failed" and "cut the video" in job.error
+    assert state["cancelled"] and state["workdir_then"] is True
+    assert fake_client.uploads == []
+
+
+async def test_cancelling_the_job_while_it_waits_for_the_narration(fake_client, videos, tmp_path, monkeypatch):
+    inp = _digest_input(videos["land"], tmp_path)
+    state = _speech_that_never_answers(monkeypatch, inp)
+    job = _new_job()
+    task = asyncio.create_task(digest.run_job(job, fake_client, inp, lambda skill, media: skill, lambda exc: "failed"))
+    deadline = time.monotonic() + 20
+    while job.message != "Transcribing what the expert says." and time.monotonic() < deadline:
+        await asyncio.sleep(0.02)
+    assert job.message == "Transcribing what the expert says."
+    await asyncio.wait_for(state["asked"].wait(), 10)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert job.status == "failed" and job.error == "The backend stopped before the video was digested. Try again."
+    assert state["cancelled"]
+    assert _digest_calls(fake_client, "DigestChunk") == [] and _digest_calls(fake_client, "DigestedSkill") == []
+    assert fake_client.uploads and sorted(fake_client.deleted) == sorted(u["id"] for u in fake_client.uploads)
+    assert not inp.workdir.exists()
 
 
 # ---------------------------------------------------------------- upload checks

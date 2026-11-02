@@ -261,6 +261,28 @@ def fake_client() -> FakeClient:
     return FakeClient()
 
 
+# The real function, for the one test that checks its request; every other test gets the stand-in below.
+from app import asr as _asr  # noqa: E402
+
+REAL_TRANSCRIBE_TURNS = _asr.transcribe_turns
+
+
+@pytest.fixture(autouse=True)
+def speech_turns(monkeypatch) -> list[bytes]:
+    """The digester asks the speech service when each sentence is said; no test reaches the network.
+    Each request's WAV is recorded; a test that wants sentences patches asr.transcribe_turns itself."""
+    from app import asr
+
+    sent: list[bytes] = []
+
+    async def no_turns(api_key, wav, timeout=180.0):
+        sent.append(wav)
+        return []
+
+    monkeypatch.setattr(asr, "transcribe_turns", no_turns)
+    return sent
+
+
 def api_status_error(cls, status: int):
     """An openai SDK status error as the real client raises it."""
     import httpx

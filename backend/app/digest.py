@@ -9,9 +9,13 @@ Stages, as the app's progress line shows them:
              Muse Spark samples a fixed frame budget (about 1 fps up to roughly 5 minutes); a longer
              video is subsampled and its timestamps come back compressed, so no call sees more.
   uploading  every part and every PDF go to the Files API. All are deleted when the reading ends.
+             Meanwhile the speech service splits the narration into sentences with their real
+             start and end (ENDPOINTING mode); a silent video, or a failed request, has none.
   reading    one part: one call watches the video, reads the PDFs and writes the skill.
              Several parts: one call per part lists the steps seen in it (video only), then
   merging    one text call turns those steps (with absolute times) and the PDFs into the skill.
+             Every reader of the video gets the sentences said in what it watches, with their
+             times, so its step times stay on the moments the expert announces them.
   frames     per step: the sharpest frame around the model's best second, grounded with SAM 3.1,
              becomes the reference photo; a clip of the step is cut from the video.
   saving     published like a compiled skill.
@@ -36,7 +40,7 @@ from typing import Any, TypeVar
 
 from PIL import Image, ImageFilter, ImageStat
 
-from . import sam
+from . import asr, sam
 from .compiler import COMPILED_SKILL_JSON_SCHEMA, slugify
 from .config import settings
 from .media import prepare_image
@@ -75,6 +79,14 @@ HDR_TRANSFERS = ("arib-std-b67", "smpte2084")
 TONE_MAP = "scale=out_transfer=bt709:out_primaries=bt709:out_color_matrix=bt709:out_range=tv"
 # ffprobe reads only the container's headers; past this something is wrong with the Mac, not the file.
 PROBE_TIMEOUT_S = 60.0
+# Pulling one narration request's sound out as WAV.
+AUDIO_TIMEOUT_S = 120.0
+# Each narration request hears this much more sound either side of its piece, so a sentence said
+# across a cut is heard whole by the piece it starts in. The service takes at most 10 minutes.
+NARRATION_OVERLAP_S = 20.0
+NARRATION_MAX_REQUEST_S = 600.0
+# A sentence that began in an earlier part is told to a later part only when this much of it is inside.
+NARRATION_MIN_SHARED_S = 0.5
 
 
 # ---------------------------------------------------------------- prompts and schemas
@@ -85,7 +97,7 @@ DIGEST_SYSTEM_PROMPT = """You are the Athena skill compiler. Turn a hands-on how
 Rules:
 - Follow the order the expert works in and keep their wording where it is clear. What the expert says aloud counts as much as what they do. Fill gaps a novice would hit (which screw, which direction, what to hold).
 - Each step must be checkable from one photo: write expected_state as what must be visible, concrete and physical.
-- Give the second in the video where each step starts (start_s) and ends (end_s), and the second whose frame best shows it done (frame_s): the result in plain view, hands out of the way where possible. Steps only in the document get start_s, end_s and frame_s of -1.
+- Give the second in the video where each step starts (start_s) and ends (end_s), and the second whose frame best shows it done (frame_s): the result in plain view, hands out of the way where possible. When the expert's sentences come with their times, use them to keep these times right. Steps only in the document get start_s, end_s and frame_s of -1.
 - Mark safety gates: power locked out or unplugged, gas or water valves closed, pressure or fluid drained, vehicle secured. Mark a step as a safety gate only when it removes a hazard. Gates come first. gate_requirement states the photo evidence, e.g. "the plug is out of the outlet and both are in the same frame".
 - source is video (only the video shows it), document (only the document has it), both, or added. Use added only for a hazard-removal gate that neither the video nor the document covers but the task clearly needs (power, gas, pressure, hot fluid, a raised vehicle).
 - document_note carries the document's specs and cautions for the step (torque, sizes, thread direction, limits) in one or two sentences, empty when none.
@@ -105,7 +117,7 @@ List every step the expert does in this part, in order:
 - visible_result: what can be seen once the step is done.
 - spoken_details: facts the expert says aloud about the step (sizes, torque, warnings). Empty when none.
 - safety: hazards the step handles or mentions (power, gas, water, pressure, hot fluid, a raised vehicle). Empty when none.
-- start_s and end_s: when the step starts and ends. frame_s: the second whose frame best shows it done. All three are whole seconds from the start of THIS PART, not of the whole video.
+- start_s and end_s: when the step starts and ends. frame_s: the second whose frame best shows it done. All three are whole seconds from the start of THIS PART, not of the whole video. When the expert's sentences come with their times, use them to keep these times right.
 - tools and parts: the ones seen or named in the step.
 A step already under way when the part begins, or still going when it ends, is listed too.
 summary: one or two sentences on what this part covers. No markdown."""
@@ -416,6 +428,85 @@ def sharpness(image: bytes) -> float:
         return float(ImageStat.Stat(gray.filter(ImageFilter.FIND_EDGES)).var[0])
 
 
+# ---------------------------------------------------------------- the narration
+
+
+async def narration(api_key: str, video: Path, info: VideoInfo) -> list[asr.Turn]:
+    """What the expert says, sentence by sentence, in seconds into the whole video.
+
+    Muse Spark hears the narration but places it in time loosely: on a real 4:41 video its step times
+    ran up to 12 s late. The speech service measures each sentence's start and end from the sound.
+    Empty when the video is silent, when DIGEST_NARRATION is off, or when the speech service fails:
+    the digest then goes on as before."""
+    if not (settings.digest_narration and info.has_audio and api_key):
+        return []
+    sem = asyncio.Semaphore(3)
+
+    async def piece(a: float, b: float) -> list[asr.Turn]:
+        """The sentences that start in [a, b), from a request that hears the overlap either side."""
+        s0 = max(0.0, a - NARRATION_OVERLAP_S)
+        length = min(info.duration, b + NARRATION_OVERLAP_S) - s0
+        async with sem:
+            wav = await _run(
+                [
+                    settings.ffmpeg_bin, "-loglevel", "error", "-ss", f"{s0:.3f}", "-i", str(video), "-t", f"{length:.3f}",
+                    # Silence fills any gap before the first sound sample, so second 0 of the WAV is second s0 of the video.
+                    "-vn", "-af", "aresample=async=1:first_pts=0", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+                    "-f", "wav", "pipe:1",
+                ],
+                timeout=AUDIO_TIMEOUT_S,
+                what="read the narration",
+            )
+            turns = await asr.transcribe_turns(api_key, wav)
+        return [
+            asr.Turn(s0 + t.start, min(info.duration, s0 + t.end), t.text) for t in turns if a <= s0 + t.start < b
+        ]
+
+    try:
+        # A piece and its overlap stay inside one request; a setting of 0 must not stop the digest.
+        piece_s = min(max(settings.digest_narration_piece_s, 1.0), NARRATION_MAX_REQUEST_S - 2 * NARRATION_OVERLAP_S)
+        pieces = plan_chunks(info.duration, piece_s)
+        results = await _all_or_nothing([piece(a, b) for a, b in pieces])
+    except Exception as exc:  # an aid to the readers, never a reason to fail the digest
+        log.warning("digest narration skipped: %r", exc)
+        return []
+    turns = [t for r in results for t in r]
+    log.info("digest narration: %d sentences from %d request(s)", len(turns), len(pieces))
+    return sorted(turns, key=lambda t: t.start)
+
+
+def narration_text(turns: list[asr.Turn], span: tuple[float, float] | None) -> str | None:
+    """The sentences said inside `span` (None: the whole video) as prompt lines, with times counted
+    from the start of the span. A sentence that starts in the span is listed; one that began earlier
+    only when NARRATION_MIN_SHARED_S of it is inside. A line cut at the span's edge says so.
+    None when nothing is said there."""
+    a, b = span if span else (0.0, math.inf)
+    lines: list[str] = []
+    for t in turns:
+        if not a <= t.start < b and min(t.end, b) - max(t.start, a) < NARRATION_MIN_SHARED_S:
+            continue
+        cut = [w for w, yes in (("began before this part", t.start < a), ("goes on after this part", t.end > b)) if yes]
+        note = f" ({', '.join(cut)})" if cut else ""
+        lines.append(f"- {max(t.start, a) - a:.1f} to {min(t.end, b) - a:.1f}{note}: {t.text}")
+    if not lines:
+        return None
+    where = "this part" if span else "the video"
+    edges = " A line marked as begun before or going on after this part is cut at the part's edge." if span else ""
+    return (
+        f"What the expert says in {where}, from speech recognition: one line per sentence, with the second it "
+        f"starts and the second it ends, counted from the start of {where}.{edges} The times are measured from "
+        "the sound and are exact; the words may have small recognition errors. Use the times to place the steps: "
+        "a step usually starts within a few seconds of the sentence that announces it, but the picture decides "
+        "when the hands start and when the step is done.\n" + "\n".join(lines)
+    )
+
+
+async def _heard(job: DigestJob, task: asyncio.Task[list[asr.Turn]]) -> list[asr.Turn]:
+    if not task.done():
+        job.message = "Transcribing what the expert says."
+    return await task
+
+
 # ---------------------------------------------------------------- Meta calls
 
 
@@ -529,7 +620,13 @@ def _absolute(value: Any, offset: float, length: float) -> float:
 
 
 async def _read_part(
-    client: Any, job: DigestJob, index: int, span: tuple[float, float], file_id: str, title_hint: str
+    client: Any,
+    job: DigestJob,
+    index: int,
+    span: tuple[float, float],
+    file_id: str,
+    title_hint: str,
+    turns: list[asr.Turn],
 ) -> tuple[list[Observed], str]:
     a, b = span
     n = job.chunks_total
@@ -540,6 +637,9 @@ async def _read_part(
         f"the first frame of this part, which is {length:.0f} seconds long."
     )
     content: list[dict[str, Any]] = [{"type": "input_text", "text": intro}, _file(file_id)]
+    said = narration_text(turns, span)
+    if said:
+        content.append({"type": "input_text", "text": said})
     if title_hint.strip():
         content.append({"type": "input_text", "text": f"The expert calls this task: {title_hint.strip()}."})
     data = await _structured(client, "DigestChunk", CHUNK_SCHEMA, CHUNK_SYSTEM_PROMPT, content)
@@ -792,19 +892,21 @@ async def digest(client: Any, inp: DigestInput, job: DigestJob) -> tuple[Skill, 
     n = len(spans)
     job.chunks_total = n
     job.progress = max(job.progress, 0.1)
-    if n == 1:
-        parts = [normalized]
-    else:
-        parts = []
-        for i, (a, b) in enumerate(spans):
-            part = inp.workdir / f"part_{i + 1}.mp4"
-            await cut(normalized, part, a, b - a)
-            parts.append(part)
-            job.progress = round(max(job.progress, 0.1 + 0.05 * (i + 1) / n), 3)
-
     docs = inp.documents
     uploaded: list[str] = []
+    # The speech service works while the parts are cut and uploaded; the readers wait for it.
+    heard = asyncio.create_task(narration(str(getattr(client, "api_key", "") or ""), normalized, info))
     try:
+        if n == 1:
+            parts = [normalized]
+        else:
+            parts = []
+            for i, (a, b) in enumerate(spans):
+                part = inp.workdir / f"part_{i + 1}.mp4"
+                await cut(normalized, part, a, b - a)
+                parts.append(part)
+                job.progress = round(max(job.progress, 0.1 + 0.05 * (i + 1) / n), 3)
+
         _stage(
             job, "uploading", 0.15,
             "Uploading the video and the document to Meta." if docs else "Uploading the video to Meta.",
@@ -826,15 +928,18 @@ async def digest(client: Any, inp: DigestInput, job: DigestJob) -> tuple[Skill, 
             + [upload(d.path, f"document_{i + 1}.pdf", "application/pdf") for i, d in enumerate(docs)]
         )
         video_ids, doc_ids = ids[: len(parts)], ids[len(parts):]
+        turns = await _heard(job, heard)
 
         if n == 1:
             _stage(
                 job, "reading", 0.25,
                 "Muse Spark is watching the video and reading the document." if docs else "Muse Spark is watching the video.",
             )
+            said = narration_text(turns, None)
             content = [
                 {"type": "input_text", "text": "The expert's video:"},
                 _file(video_ids[0]),
+                *([{"type": "input_text", "text": said}] if said else []),
                 *_document_blocks(docs, doc_ids),
                 _closing(inp.title_hint),
             ]
@@ -844,7 +949,7 @@ async def digest(client: Any, inp: DigestInput, job: DigestJob) -> tuple[Skill, 
 
             async def read(i: int) -> tuple[list[Observed], str]:
                 async with sem:
-                    return await _read_part(client, job, i, spans[i], video_ids[i], inp.title_hint)
+                    return await _read_part(client, job, i, spans[i], video_ids[i], inp.title_hint, turns)
 
             results = await _all_or_nothing([read(i) for i in range(n)])
             _stage(
@@ -867,6 +972,9 @@ async def digest(client: Any, inp: DigestInput, job: DigestJob) -> tuple[Skill, 
             ]
             data = await _structured(client, "DigestedSkill", DIGESTED_SKILL_SCHEMA, DIGEST_SYSTEM_PROMPT, content)
     finally:
+        if not heard.done():
+            heard.cancel()
+        await asyncio.gather(heard, return_exceptions=True)
         await _delete_all(client, uploaded)
 
     drafts = check_skill(data, duration)

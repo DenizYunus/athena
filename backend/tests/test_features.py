@@ -6,12 +6,14 @@ import io
 import json
 import wave
 
+import httpx
 import pytest
 
 from app import asr, sam
 from app.compiler import Capture, compile_skill
 from app.schemas import Highlight, Skill
 from app.store import SessionStore, SkillStore
+from conftest import REAL_TRANSCRIBE_TURNS
 
 
 # ---------------------------------------------------------------- SAM
@@ -88,6 +90,7 @@ async def test_transcribe_wav_request_shape(monkeypatch):
     real = httpx.AsyncClient
 
     def patched(*args, **kwargs):
+        seen["timeout"] = kwargs.get("timeout")
         kwargs["transport"] = httpx.MockTransport(handler)
         return real(*args, **kwargs)
 
@@ -99,7 +102,51 @@ async def test_transcribe_wav_request_shape(monkeypatch):
     body = seen["body"]
     assert b'name="request"' in body and b'"keywords": ["start relay"]' in body
     assert b'name="audio"; filename="clip.wav"' in body
-    assert b'"audioEncoding": "WAV"' in body
+    assert b'"audioEncoding": "WAV"' in body and b'"mode": "PUSH_TO_TALK"' in body
+    assert seen["timeout"] == 60
+
+
+def _mock_speech(monkeypatch, answer: httpx.Response, seen: dict) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["auth"] = request.headers.get("authorization")
+        seen["body"] = request.content
+        return answer
+
+    real = httpx.AsyncClient
+
+    def patched(*args, **kwargs):
+        seen["timeout"] = kwargs.get("timeout")
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", patched)
+
+
+async def test_transcribe_turns_asks_for_endpointing_and_reads_the_turns(monkeypatch):
+    seen: dict = {}
+    answer = {
+        "sessionId": "x",
+        "transcript": "First loosen the bolts. Now mark the casing.",
+        "audioDurationMs": 9000,
+        "turns": [
+            {"turnId": 1, "startMs": 120, "endMs": 2900, "transcript": "First loosen the bolts."},
+            {"turnId": 2, "startMs": 4100, "endMs": 6050, "transcript": "Now mark the casing."},
+        ],
+    }
+    _mock_speech(monkeypatch, httpx.Response(200, json=answer), seen)
+    turns = await REAL_TRANSCRIBE_TURNS("LLM|1|k", b"RIFF....")
+    assert turns == [asr.Turn(0.12, 2.9, "First loosen the bolts."), asr.Turn(4.1, 6.05, "Now mark the casing.")]
+    assert seen["url"].endswith("/asr/transcribe") and seen["auth"] == "Bearer LLM|1|k"
+    assert b'"mode": "ENDPOINTING"' in seen["body"] and b'"audioEncoding": "WAV"' in seen["body"]
+    assert b"keywords" not in seen["body"]
+    assert seen["timeout"] == 180.0
+
+
+async def test_a_speech_answer_that_is_not_an_object_is_a_transcribe_error(monkeypatch):
+    _mock_speech(monkeypatch, httpx.Response(200, json=["not", "an", "object"]), {})
+    with pytest.raises(asr.TranscribeError, match="not a JSON object"):
+        await asr.transcribe_wav("LLM|1|k", b"RIFF....")
 
 
 def test_turn_uses_clip_transcription_when_no_transcript(app_client, fake_client, monkeypatch):

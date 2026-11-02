@@ -53,6 +53,11 @@ class Settings:
     digest_clip_max_s: float = 30.0
     # Uploads are deleted when the digest ends; the expiry only catches what a crash leaves behind.
     digest_file_ttl_s: int = 86400
+    # Muse Spark hears the narration but places it in time loosely. The speech service splits the
+    # audio into sentences with their real start and end, and each part's reader gets those lines.
+    # One request takes at most 10 minutes of audio.
+    digest_narration: bool = True
+    digest_narration_piece_s: float = 540.0
 
 
 def load_settings() -> Settings:
@@ -81,6 +86,8 @@ def load_settings() -> Settings:
         digest_parallel_calls=int(os.environ.get("DIGEST_PARALLEL_CALLS", "6")),
         digest_clip_max_s=float(os.environ.get("DIGEST_CLIP_MAX_S", "30")),
         digest_file_ttl_s=int(os.environ.get("DIGEST_FILE_TTL_S", "86400")),
+        digest_narration=os.environ.get("DIGEST_NARRATION", "1").strip().lower() not in ("0", "false", "no", "off"),
+        digest_narration_piece_s=float(os.environ.get("DIGEST_NARRATION_PIECE_S", "540")),
     )
 
 

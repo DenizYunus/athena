@@ -4,6 +4,10 @@ transcribe_clip(): batch. The audio track of an mp4 (or any file ffmpeg reads) i
 converted to 16 kHz mono WAV and posted to /asr/transcribe. Used when a turn arrives
 with a clip and no transcript, and for the author's dictated notes.
 
+transcribe_turns(): batch in ENDPOINTING mode. The service splits the audio where the
+speaker pauses and gives each turn its start and end. The video digester uses it to
+tell Muse Spark when each sentence of the narration is said.
+
 relay(): realtime. The phone streams raw PCM over a WebSocket to the backend, which
 forwards it to wss://api.meta.ai/v1/asr/realtime and sends the transcript events
 back. The backend adds the skill vocabulary as keyword bias and keeps the API key on
@@ -14,9 +18,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import shutil
 import tempfile
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -74,11 +80,49 @@ async def media_to_wav(data: bytes, sample_rate: int = 16000) -> bytes:
 
 
 async def transcribe_wav(api_key: str, wav: bytes, keywords: list[str] | None = None) -> str:
-    request = {"model": settings.asr_model, "audioEncoding": "WAV", "mode": "PUSH_TO_TALK"}
+    data = await _post_transcribe(api_key, wav, "PUSH_TO_TALK", keywords, timeout=60)
+    return (data.get("transcript") or "").strip()
+
+
+@dataclass
+class Turn:
+    """One sentence the speech service heard: seconds into the audio that was sent, and its words."""
+
+    start: float
+    end: float
+    text: str
+
+
+async def transcribe_turns(api_key: str, wav: bytes, timeout: float = 180.0) -> list[Turn]:
+    """The audio split into turns where the speaker pauses, each with its start and end (at most
+    10 minutes of audio per request)."""
+    return parse_turns(await _post_transcribe(api_key, wav, "ENDPOINTING", None, timeout))
+
+
+def parse_turns(data: Any) -> list[Turn]:
+    """The response's turns that have words and a usable time, in seconds, in order."""
+    raw = data.get("turns") if isinstance(data, dict) else None
+    turns: list[Turn] = []
+    for t in raw if isinstance(raw, list) else []:
+        if not isinstance(t, dict):
+            continue
+        text = str(t.get("transcript") or "").strip()
+        try:
+            start = float(t["startMs"]) / 1000
+            end = start if t.get("endMs") is None else float(t["endMs"]) / 1000
+        except (KeyError, TypeError, ValueError):
+            continue
+        if text and math.isfinite(start) and math.isfinite(end) and start >= 0:
+            turns.append(Turn(start, max(start, end), text))
+    return sorted(turns, key=lambda t: t.start)
+
+
+async def _post_transcribe(api_key: str, wav: bytes, mode: str, keywords: list[str] | None, timeout: float) -> dict:
+    request: dict[str, Any] = {"model": settings.asr_model, "audioEncoding": "WAV", "mode": mode}
     if keywords:
         request["keywords"] = keywords[:50]
     try:
-        async with httpx.AsyncClient(timeout=60) as http:
+        async with httpx.AsyncClient(timeout=timeout) as http:
             resp = await http.post(
                 f"{settings.base_url}/asr/transcribe",
                 headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
@@ -92,9 +136,12 @@ async def transcribe_wav(api_key: str, wav: bytes, keywords: list[str] | None = 
     if resp.status_code != 200:
         raise TranscribeError(f"transcribe failed ({resp.status_code}): {resp.text[:300]}", resp.status_code)
     try:
-        return (resp.json().get("transcript") or "").strip()
+        data = resp.json()
     except ValueError as exc:
         raise TranscribeError(f"transcribe failed: not JSON: {resp.text[:200]}") from exc
+    if not isinstance(data, dict):
+        raise TranscribeError(f"transcribe failed: not a JSON object: {resp.text[:200]}")
+    return data
 
 
 async def transcribe_clip(api_key: str, media: bytes, keywords: list[str] | None = None) -> str:

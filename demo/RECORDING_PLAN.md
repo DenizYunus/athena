@@ -72,7 +72,7 @@ Record in this order. Minimum takes: two per clip. Each row says what must be vi
 | D1 | Fridge gate refused | Fridge skill, step 1, plug still in the outlet, tap ✓. | Plug in the outlet; the refusal bubble. | 12 s |
 | D2 | Fridge gate passed | Pull the plug, hold it so plug and outlet share the frame, tap ✓. | Plug and empty outlet together; *Verified*. | 12 s |
 | E1 | Under the hood | Mac screen: README models table (QuickTime screen recording or a screenshot). | The four model rows. | 5 s |
-| E2 | Under the hood | Terminal: `cd backend && .venv/bin/python -m pytest -q` → *131 passed*. | The green line. | 4 s |
+| E2 | Under the hood | Terminal: `cd backend && .venv/bin/python -m pytest -q` → *150 passed*. | The green line. | 4 s |
 | E3 | Under the hood | Terminal: `git log --format='%ad %s' --date=short` scrolled. | Dates from Oct 27, 2026 on. | 4 s |
 | E4 | Under the hood | Browser: github.com/DenizYunus/athena/releases. | The APK asset. | 4 s |
 | G2 | Close | scrcpy on the emulator (`athena_api36`) or the phone with Settings → Glasses → Mock Device Kit: open a session, tap the **Glasses** pill, wait for "Glasses ✓", tap ✓ once. | The pill turning to Glasses ✓, the preview switching to the glasses stream, a verdict. Not the `design/` glasses artboards: they show spoken commands and an automatic capture the app does not have. | 10 s |
