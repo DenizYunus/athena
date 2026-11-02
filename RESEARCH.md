@@ -3,6 +3,8 @@
 Meta Global AI Developer Hackathon · building period Oct 27 – Nov 4, 2026 · submit by Wed Nov 4, 9:00 PM ET.
 Researched Oct 27, 2026 against dev.meta.ai docs, the meta-model-cookbook repo, and the Wearables Device Access Toolkit docs.
 
+> **Status, Nov 1:** this is the day-0 plan, kept as written. The README describes what was built, which differs in places: the verifier and compiler use structured output and the app runs its own check loop (no tool calling); there are two seed skills, not four to six; the app is Android only; skills are JSON files on the backend, not Postgres and S3; there are no payouts yet; and there are no spoken commands such as "done".
+
 ## 1. The idea in one paragraph
 
 Athena is a marketplace of **procedural skills**. An expert (a refrigerator mechanic) photographs a repair and writes rough instructions. Muse Spark compiles that into a structured skill: ordered steps, the visual state that proves each step is done, safety gates, tools needed. A non-expert installs the skill and is walked through it by a guide agent that sees what they see (phone camera, or Ray-Ban Meta glasses), tells them what to do, checks each step from a photo, asks for a better angle when it cannot tell, and refuses to advance past a safety gate until the evidence is there. The expert gets paid per completion.

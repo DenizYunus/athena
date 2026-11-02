@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+import httpx
 from openai import AsyncOpenAI
 
 from .config import settings
@@ -15,7 +16,14 @@ from .config import settings
 
 @lru_cache(maxsize=8)
 def _client_for(api_key: str) -> AsyncOpenAI:
-    return AsyncOpenAI(base_url=settings.base_url, api_key=api_key)
+    # The SDK default (600 s, two retries) outlasts the app, which gives up after 120 s and lets
+    # the learner check again while the first call is still running.
+    return AsyncOpenAI(
+        base_url=settings.base_url,
+        api_key=api_key,
+        timeout=httpx.Timeout(settings.model_timeout_s, connect=10.0),
+        max_retries=settings.model_max_retries,
+    )
 
 
 def get_client(api_key: str | None = None) -> AsyncOpenAI:

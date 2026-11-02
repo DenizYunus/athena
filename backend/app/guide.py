@@ -10,6 +10,7 @@ the real AsyncOpenAI from meta_client.get_client().
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -17,9 +18,11 @@ from typing import Any
 from .config import settings
 from .media import image_block, image_block_from_source, prepare_image, video_block
 from .prompts import guide_system_prompt, verify_system_prompt, verify_user_blocks
-from .schemas import Message, Session, Skill, StepVerdict
+from .schemas import Message, Session, Skill, Step, StepVerdict
 
 MAX_HISTORY_MESSAGES = 12
+
+log = logging.getLogger("athena")
 
 
 def _history_items(session: Session) -> list[dict[str, Any]]:
@@ -41,7 +44,10 @@ async def turn_stream(
     clip_mp4: bytes | None = None,
     photo: bytes | None = None,
 ) -> AsyncIterator[str]:
-    """Yield reply text deltas. Appends the exchange to session.history when done."""
+    """Yield reply text deltas. Appends the exchange to session.history when done.
+
+    A failed, refused, cut-off or empty answer raises instead, so the turn fails visibly and
+    nothing half-finished goes into the history the next turn replays."""
     step = skill.step(session.current_step)
 
     content: list[dict[str, Any]] = []
@@ -71,10 +77,19 @@ async def turn_stream(
             delta = getattr(event, "delta", "") or ""
             parts.append(delta)
             yield delta
-        elif etype == "response.failed":
-            raise RuntimeError(f"Meta API stream failed: {getattr(event, 'response', None)}")
+        elif etype in ("response.failed", "error"):
+            # The upstream detail goes to the log only: the text reaches the learner's screen.
+            log.warning("guide stream %s: %r", etype, event)
+            raise RuntimeError("Meta API stream failed: the guide's answer broke off on the Meta side. Ask again.")
+        elif etype == "response.incomplete":
+            log.warning("guide stream incomplete: %r", event)
+            raise RuntimeError("Meta API stream failed: the guide's answer was cut off. Ask again.")
+        elif etype == "response.refusal.done":
+            raise RuntimeError("The guide declined to answer that. Ask about the current step.")
 
     reply = "".join(parts).strip()
+    if not reply:
+        raise RuntimeError("The guide sent an empty answer. Ask again.")
     session.history.append(
         Message(role="user", text=text, step=step.n, had_clip=bool(clip_mp4), had_photo=bool(photo))
     )
@@ -94,10 +109,18 @@ async def turn(
 
 
 async def verify(
-    client: Any, skill: Skill, session: Session, photo: bytes, media_dir: Path | None = None
+    client: Any,
+    skill: Skill,
+    session: Session,
+    photo: bytes,
+    media_dir: Path | None = None,
+    step: Step | None = None,
 ) -> StepVerdict:
-    """One structured-output call. Does not mutate the session; the API layer decides what to do."""
-    step = skill.step(session.current_step)
+    """One structured-output call. Does not mutate the session; the API layer decides what to do.
+
+    `step` is the step to judge; the API layer passes the one it records the verdict under, so the
+    two cannot differ if the session moves on while the photo is being read."""
+    step = step or skill.step(session.current_step)
     reference = image_block_from_source(step.reference_image, media_dir) if step.reference_image else None
     user_blocks = verify_user_blocks(reference, image_block(prepare_image(photo)))
 
@@ -116,11 +139,18 @@ async def verify(
             }
         },
     )
-    raw = response.output_text
+    raw = response.output_text or ""
+    status = getattr(response, "status", None)
+    # A refusal leaves no output text and a cut-off answer is half a JSON object. The raw text goes to
+    # the log only; the learner gets a sentence.
+    if status not in (None, "completed") or not raw.strip():
+        log.warning("verifier answer unusable: status=%s output=%r", status, raw[:300])
+        raise RuntimeError("The checker could not give an answer for this photo. Take it again.")
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Verifier returned non-JSON: {raw[:200]}") from exc
+        log.warning("verifier answer is not JSON: %r", raw[:300])
+        raise RuntimeError("The checker's answer could not be read. Take the photo again.") from exc
     verdict = StepVerdict.model_validate(data)
     if step.safety_gate and verdict.status == "pass" and verdict.confidence < 0.8:
         # Belt and braces: a hesitant pass on a gate is treated as unclear.

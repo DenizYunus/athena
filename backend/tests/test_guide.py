@@ -91,6 +91,85 @@ async def test_turn_uploads_large_clip_to_files_api(fake_client, skill, monkeypa
     assert user["content"][0]["text"].startswith("(no words")
 
 
+def test_prepare_image_turns_photo_upright_from_exif():
+    """A phone photo taken with skipProcessing keeps sensor-oriented pixels plus an Orientation tag."""
+    from PIL import Image
+    import io
+
+    img = Image.new("RGB", (400, 300), (200, 30, 30))
+    img.paste((30, 30, 200), (0, 0, 400, 30))  # a blue band along the top of the sensor frame
+    exif = Image.Exif()
+    exif[0x0112] = 6  # stored rotated: display it turned 90 degrees clockwise
+    raw = io.BytesIO()
+    img.save(raw, format="JPEG", exif=exif.tobytes())
+
+    out = prepare_image(raw.getvalue())
+    with Image.open(io.BytesIO(out)) as upright:
+        assert upright.size == (300, 400)  # portrait, as the phone shows it
+        assert upright.getexif().get(0x0112) is None  # no tag left to apply twice
+        r, g, b = upright.getpixel((290, 200))  # the top band now runs down the right edge
+        assert b > 150 and r < 100
+
+
+def test_prepare_image_survives_a_malformed_exif_block():
+    """Pillow's exif_transpose rewrites the whole EXIF block and raises on a tag stored with the wrong type."""
+    from PIL import Image
+    import io
+    import struct
+
+    entries = [
+        struct.pack("<HHI4s", 0x0112, 3, 1, struct.pack("<HH", 6, 0)),  # Orientation 6, as a SHORT
+        struct.pack("<HHI4s", 0x0117, 2, 4, b"Cam\x00"),  # StripByteCounts stored as ASCII
+    ]
+    tiff = b"II*\x00" + struct.pack("<I", 8) + struct.pack("<H", len(entries)) + b"".join(entries) + struct.pack("<I", 0)
+    raw = io.BytesIO()
+    Image.new("RGB", (400, 300), (10, 120, 10)).save(raw, format="JPEG", exif=b"Exif\x00\x00" + tiff)
+
+    out = prepare_image(raw.getvalue())
+    with Image.open(io.BytesIO(out)) as upright:
+        assert upright.size == (300, 400)
+
+
+def test_client_has_bounded_timeout_and_one_retry(monkeypatch):
+    from app import meta_client
+
+    monkeypatch.setattr(meta_client.settings, "model_timeout_s", 50.0)
+    monkeypatch.setattr(meta_client.settings, "model_max_retries", 1)
+    meta_client._client_for.cache_clear()
+    c = meta_client.get_client("LLM|9|timeout-check")
+    assert c.max_retries == 1
+    assert c.timeout.read == 50.0 and c.timeout.connect == 10.0
+    meta_client._client_for.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "ending",
+    [
+        {"type": "error", "code": "server_error", "message": "upstream 503"},
+        {"type": "response.incomplete", "response": {"incomplete_details": {"reason": "max_output_tokens"}}},
+        {"type": "response.failed", "response": {"error": {"message": "boom"}}},
+    ],
+)
+async def test_turn_stream_fails_on_broken_answer_and_keeps_history_clean(fake_client, skill, ending):
+    from types import SimpleNamespace
+
+    fake_client.next_ending = SimpleNamespace(**ending)
+    session = SessionStore().create(skill)
+    with pytest.raises(RuntimeError) as err:
+        async for _ in guide.turn_stream(fake_client, skill, session, "is this the relay?"):
+            pass
+    assert "503" not in str(err.value)
+    assert session.history == []
+
+
+async def test_turn_stream_fails_on_empty_answer(fake_client, skill):
+    fake_client.next_deltas = []
+    session = SessionStore().create(skill)
+    with pytest.raises(RuntimeError, match="empty answer"):
+        await guide.turn(fake_client, skill, session, "hello")
+    assert session.history == []
+
+
 async def test_verify_uses_structured_output(fake_client, skill, jpeg_bytes):
     session = SessionStore().create(skill)
     verdict = await guide.verify(fake_client, skill, session, jpeg_bytes)
@@ -104,6 +183,24 @@ async def test_verify_uses_structured_output(fake_client, skill, jpeg_bytes):
     blocks = call["input"][1]["content"]
     assert [b["type"] for b in blocks] == ["input_text", "input_image"]
     assert "no reference photo" in blocks[0]["text"]
+
+
+@pytest.mark.parametrize("output", ["", '{"status": "pass", "confid', "I can't help with that."])
+async def test_verify_turns_an_unusable_answer_into_a_sentence(fake_client, skill, jpeg_bytes, output):
+    fake_client.next_output_text = output
+    session = SessionStore().create(skill)
+    with pytest.raises(RuntimeError) as err:
+        await guide.verify(fake_client, skill, session, jpeg_bytes)
+    message = str(err.value)
+    assert message.startswith("The checker") and "status" not in message and "help" not in message
+
+
+async def test_verify_judges_the_step_it_is_given(fake_client, skill, jpeg_bytes):
+    session = SessionStore().create(skill)  # the session is on step 1, the safety gate
+    await guide.verify(fake_client, skill, session, jpeg_bytes, step=skill.step(2))
+    call = fake_client.calls[-1]
+    assert "SAFETY GATE" not in call["input"][0]["content"]
+    assert "Step 2:" in call["input"][0]["content"]
 
 
 async def test_verify_demotes_hesitant_pass_on_safety_gate(fake_client, skill, jpeg_bytes):

@@ -34,7 +34,7 @@ Close the scrcpy window or press Ctrl+C to stop. If the phone cannot forward aud
 ## Pre-flight, the evening before
 
 1. Backend: `backend/run.sh` in a terminal that stays open. Note the URL it prints. `ffmpeg` must be installed (`brew install ffmpeg`); the app's Settings → Test connection says if it is missing.
-2. Phone: install `athena-0.3.0.apk` from the Releases page fresh (uninstall the old build first so no test skills or stale settings remain). Settings → backend URL → Test connection → Save. Same Wi-Fi as the Mac.
+2. Phone: uninstall the old build first so no test skills or stale settings remain, then install the newest APK from the Releases page. It must be 0.4.1 or later: 0.4.0 can drop a recording when you tap the mic while the guide is talking, and 0.3.0 cannot upload photos from a device. Until v0.4.1 is on the Releases page, install `mobile/dist/athena-0.4.1.apk` from the Mac with `adb install -r mobile/dist/athena-0.4.1.apk` (or build it as the README's "Build the APK locally" shows). Settings → backend URL → Test connection → Save. Same Wi-Fi as the Mac.
 3. Walk through the whole sink skill once, off camera, with the real cabinet. This warms the prompt cache, grants the camera and microphone permissions so no permission dialogs appear on camera, and tells you how the verifier reacts to your cabinet.
 4. Delete any skills compiled during testing so the marketplace shows only the two seed skills plus the one you compile on camera:
 
@@ -72,11 +72,10 @@ Record in this order. Minimum takes: two per clip. Each row says what must be vi
 | D1 | Fridge gate refused | Fridge skill, step 1, plug still in the outlet, tap ✓. | Plug in the outlet; the refusal bubble. | 12 s |
 | D2 | Fridge gate passed | Pull the plug, hold it so plug and outlet share the frame, tap ✓. | Plug and empty outlet together; *Verified*. | 12 s |
 | E1 | Under the hood | Mac screen: README models table (QuickTime screen recording or a screenshot). | The four model rows. | 5 s |
-| E2 | Under the hood | Terminal: `cd backend && .venv/bin/python -m pytest -q` → *41 passed*. | The green line. | 4 s |
-| E3 | Under the hood | Terminal: `git log --format='%ad %s' --date=short` scrolled. | Dates Oct 27 and 28, 2026. | 4 s |
+| E2 | Under the hood | Terminal: `cd backend && .venv/bin/python -m pytest -q` → *74 passed*. | The green line. | 4 s |
+| E3 | Under the hood | Terminal: `git log --format='%ad %s' --date=short` scrolled. | Dates from Oct 27, 2026 on. | 4 s |
 | E4 | Under the hood | Browser: github.com/DenizYunus/athena/releases. | The APK asset. | 4 s |
-| G1 | Close | Browser or QuickTime: `design/GlassesStep.dc.html` and `design/GlassesUnclear.dc.html` opened, slow pan. | The 600×600 glasses cards. | 8 s |
-| G2 | Close (optional) | scrcpy on the emulator (`athena_api36`) or the phone with Settings → Glasses → Mock Device Kit: open a session, tap the **Glasses** pill, wait for "Glasses ✓", tap ✓ once. | The pill turning to Glasses ✓, the preview switching to the glasses stream, a verdict. | 10 s |
+| G2 | Close | scrcpy on the emulator (`athena_api36`) or the phone with Settings → Glasses → Mock Device Kit: open a session, tap the **Glasses** pill, wait for "Glasses ✓", tap ✓ once. | The pill turning to Glasses ✓, the preview switching to the glasses stream, a verdict. Not the `design/` glasses artboards: they show spoken commands and an automatic capture the app does not have. | 10 s |
 
 Recording tips that save retakes:
 
@@ -109,5 +108,5 @@ Recording tips that save retakes:
 
 1. Upload to YouTube as **Public** or **Unlisted** (check the submission form: if it asks for a public link, choose Public). Title: "Athena · camera-verified skills · Meta Global AI Developer Hackathon". Description: the two-sentence summary from the README plus the repo link.
 2. Put the link in `README.md` under **Submission** (the `TODO` line), commit, push.
-3. Optionally attach `athena-demo.mp4` to the v0.3.0 release so the video lives with the code.
+3. Optionally attach `athena-demo.mp4` to the newest release so the video lives with the code.
 4. Fill the submission form from `demo/SUBMISSION_FORM.md`. Submit before Wed Nov 4, 9:00 PM ET, with every team member listed.

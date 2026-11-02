@@ -133,6 +133,7 @@ async def compile_skill(client: Any, captures: list[Capture], author: str, title
                 "schema": COMPILED_SKILL_JSON_SCHEMA,
             }
         },
+        timeout=settings.compile_timeout_s,
     )
     raw = response.output_text
     try:

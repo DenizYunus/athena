@@ -293,10 +293,17 @@ export class Api {
     });
   }
 
-  async verify(sessionId: string, photoUri: string): Promise<VerifyResponse> {
+  /** `step` is the step on screen; the backend answers 409 if the session has already left it. */
+  async verify(sessionId: string, photoUri: string, step?: number): Promise<VerifyResponse> {
     const form = new FormData();
     form.append("photo", { uri: photoUri, name: "photo.jpg", type: "image/jpeg" } as any);
+    if (step !== undefined) form.append("step", String(step));
     return this.multipart(`/sessions/${sessionId}/verify`, form);
+  }
+
+  async getSession(sessionId: string): Promise<Session> {
+    const res = await fetch(this.url(`/sessions/${sessionId}`), { headers: this.headers() });
+    return this.handle(res);
   }
 
   async highlight(sessionId: string, photoUri: string, concept = ""): Promise<Highlight | null> {

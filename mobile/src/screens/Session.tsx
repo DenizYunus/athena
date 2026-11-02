@@ -14,7 +14,7 @@ import { CameraView, useCameraPermissions, useMicrophonePermissions } from "expo
 import * as Speech from "expo-speech";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from "react-native";
-import { Api, Highlight, Session, Skill, Step, Verdict } from "../api";
+import { Api, Highlight, Session, Skill, Step, Verdict, VerifyResponse } from "../api";
 import { useGlasses, type Card, type GlassesState } from "../glasses";
 import { HighlightOverlay } from "../HighlightOverlay";
 import { colors } from "../theme";
@@ -86,6 +86,8 @@ export function SessionScreen({
   };
   // When the last verdict card went to the lens, so the next step's card does not replace it at once.
   const verdictCardAtRef = useRef(0);
+  // Said before the next step's intro after a pass ("Step 2 verified."), so the intro does not cut it off.
+  const passedLineRef = useRef("");
 
   const step = useMemo(() => skill.steps.find((st) => st.n === session.current_step) ?? skill.steps[0], [skill, session.current_step]);
   const total = skill.steps.length;
@@ -105,15 +107,24 @@ export function SessionScreen({
     setBubbles((prev) => prev.map((b) => (b.id === id ? { ...b, ...patch } : b)));
   }, []);
 
+  // Each utterance has a number, and stopping speech moves the number on. Speech.stop() reports
+  // onStopped asynchronously, after the tap that stopped it has already set "recording" or
+  // "checking"; a callback from an older utterance must not put the screen back to idle.
+  const utteranceRef = useRef(0);
+  const stopSpeech = useCallback(() => {
+    utteranceRef.current++;
+    Speech.stop();
+  }, []);
+
   const say = useCallback((text: string) => {
     // A new utterance (a skipped step's intro) ends a glasses question still recording; the phase
     // alone may not change if the guide was already speaking. A no-op on the phone path.
     releaseGlassesRecordingRef.current();
-    Speech.stop();
+    stopSpeech();
+    const utterance = utteranceRef.current;
     setPhase("speaking");
-    // A glasses question interrupts the guide with Speech.stop(); the stopped callback can arrive
-    // after the question is already recording and must not end it. Both refs stay unset on the phone path.
     const settle = () => {
+      if (utterance !== utteranceRef.current) return;
       if (glassesOpRef.current || glassesRecordingRef.current) return;
       setPhase("idle");
     };
@@ -124,7 +135,7 @@ export function SessionScreen({
       onStopped: settle,
       onError: settle,
     });
-  }, []);
+  }, [stopSpeech]);
 
   useEffect(() => {
     (async () => {
@@ -139,9 +150,11 @@ export function SessionScreen({
       ? `Safety gate before we start. ${step.instruction} Show me, then tap check.`
       : `Step ${step.n} of ${total}. ${step.instruction}`;
     push({ who: "guide", text: intro, tone: step.safety_gate ? "gate" : undefined });
-    say(intro);
+    const passed = passedLineRef.current;
+    passedLineRef.current = "";
+    say(passed + intro);
     return () => {
-      Speech.stop();
+      stopSpeech();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.current_step]);
@@ -210,7 +223,7 @@ export function SessionScreen({
     if (phase !== "recording" && glassesOn) return onTapRecordGlasses();
     if (!camera.current) return;
     if (phase === "idle" || phase === "speaking") {
-      Speech.stop();
+      stopSpeech();
       setOverlay(null);
       if (cameraMode !== "video") {
         setCameraMode("video");
@@ -227,7 +240,7 @@ export function SessionScreen({
       }
       recordingPromise.current
         .then((r) => {
-          if (r?.uri && phaseRef.current === "recording") sendClip(r.uri);
+          if (r?.uri && phaseRef.current === "recording") sendClip(r.uri, undefined, secondsRef.current);
           else if (!r?.uri) setPhase("idle");
         })
         .catch((e) => {
@@ -250,7 +263,7 @@ export function SessionScreen({
         return;
       }
       beginGlassesOp("arming");
-      Speech.stop();
+      stopSpeech();
       setOverlay(null);
       try {
         await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
@@ -354,8 +367,8 @@ export function SessionScreen({
 
   async function onTapCheck() {
     if (glassesOn) return onTapCheckGlasses();
-    if (!camera.current || (phase !== "idle" && phase !== "speaking")) return;
-    Speech.stop();
+    if (!camera.current || (phase !== "idle" && phase !== "speaking") || session.completed) return;
+    stopSpeech();
     setOverlay(null);
     setPhase("checking");
     try {
@@ -363,6 +376,8 @@ export function SessionScreen({
         setCameraMode("picture");
         await wait(500);
       }
+      // skipProcessing keeps the shutter fast; the file may hold sideways pixels plus an EXIF
+      // Orientation tag, which the backend applies before the verifier and SAM see the photo.
       const photo = await camera.current.takePictureAsync({ quality: 0.85, skipProcessing: true });
       if (!photo?.uri) throw new Error("no photo");
       push({ who: "user", text: `Photo sent for step ${step.n}` });
@@ -377,17 +392,17 @@ export function SessionScreen({
 
   /** Glasses check: capturePhoto() on the stream (or the latest frame) goes to the verifier. */
   async function onTapCheckGlasses() {
-    if (phase !== "idle" && phase !== "speaking") return;
+    if ((phase !== "idle" && phase !== "speaking") || session.completed) return;
     if (glassesOpRef.current) return;
     if (!glasses.live) {
       push({ who: "guide", text: glassesNotLiveText(glasses.state, glasses.message, glasses.mock), tone: "unclear" });
       return;
     }
     beginGlassesOp("checking");
-    Speech.stop();
+    stopSpeech();
     setOverlay(null);
     setPhase("checking");
-    glasses.showCard({ kind: "checking", eyebrow: `STEP ${step.n} OF ${total} · photo taken`, title: "Checking…", body: "Comparing with the reference photo. Keep your hands where they are.", hint: "usually 3 to 5 seconds" });
+    glasses.showCard({ kind: "checking", eyebrow: `STEP ${step.n} OF ${total} · photo taken`, title: "Checking…", body: step.reference_image ? "Comparing with the reference photo. Keep your hands where they are." : "Checking it against what this step should look like. Keep your hands where they are.", hint: "usually 3 to 5 seconds" });
     try {
       const photo = await glasses.capturePhoto();
       push({ who: "user", text: `Photo from the glasses sent for step ${step.n}` });
@@ -403,8 +418,29 @@ export function SessionScreen({
 
   /** The strict verification and what follows from the verdict, for a photo from either camera. */
   async function verifyPhoto(photoUri: string) {
-    const res = await api.verify(session.id, photoUri);
+    let res: VerifyResponse;
+    try {
+      res = await api.verify(session.id, photoUri, step.n);
+    } catch (e: any) {
+      // 409: the session has already left this step (an earlier check finished after the app
+      // stopped waiting) or is complete. Show where it really is instead of the raw status.
+      const fresh = e?.status === 409 ? await api.getSession(session.id).catch(() => null) : null;
+      if (!fresh) throw e;
+      push({ who: "guide", text: "That photo was for a step that is already behind us. Here is where we are now.", tone: "unclear" });
+      setSession(fresh);
+      setPhase("idle");
+      return;
+    }
     const v = res.verdict;
+    if (v.status === "pass" && !res.advanced && !res.completed) {
+      // The session moved on while this photo was being judged (a skip during the check). The photo
+      // passed, but nothing advanced, and the current step's intro is already being spoken.
+      push({ who: "guide", text: `The photo for step ${step.n} passed, but we had already moved on.`, tone: "pass" });
+      setSession((s) => ({ ...s, current_step: res.current_step, completed: res.completed }));
+      if (glasses.on) restoreStepCard();
+      if (phaseRef.current === "checking") setPhase("idle");
+      return;
+    }
     push({ who: "guide", text: verdictLine(v, step.safety_gate), tone: v.status });
     if (res.highlight && res.highlight.objects.length) {
       const color = toneColor(v.status);
@@ -421,7 +457,8 @@ export function SessionScreen({
     } else if (!res.advanced) {
       say(verdictSpeech(v));
     } else {
-      Speech.speak(`Step ${step.n} verified.`, { language: "en-US" });
+      // The step change that follows speaks this line and then the next step's intro.
+      passedLineRef.current = `Step ${step.n} verified. `;
       setPhase("idle");
     }
   }
@@ -557,7 +594,7 @@ export function SessionScreen({
             </View>
           )}
 
-          <Pressable onPress={onTapCheck} style={[s.sideBtn, { borderColor: colors.pass }]} accessibilityLabel="Check this step now" disabled={(phase !== "idle" && phase !== "speaking") || glassesOp !== null}>
+          <Pressable onPress={onTapCheck} style={[s.sideBtn, { borderColor: colors.pass }]} accessibilityLabel="Check this step now" disabled={(phase !== "idle" && phase !== "speaking") || glassesOp !== null || session.completed}>
             <Text style={[s.sideBtnText, { color: colors.pass, fontSize: 20 }]}>✓</Text>
           </Pressable>
         </View>
@@ -668,8 +705,8 @@ function glassesWaitText(state: GlassesState, message: string | null, mock: bool
 // 600x600 lens cards for Meta Ray-Ban Display, after design/Glasses*.dc.html. Ignored on glasses without a display.
 function stepCard(step: Step, total: number, completed: boolean): Card {
   if (completed) return { kind: "pass", eyebrow: "DONE", title: "All steps verified", body: "Nice work.", hint: "" };
-  if (step.safety_gate) return { kind: "gate", eyebrow: `SAFETY GATE · before step ${step.n}`, title: step.instruction, body: step.gate_requirement ?? step.expected_state, hint: 'Say "done" or tap check' };
-  return { kind: "step", eyebrow: `STEP ${step.n} OF ${total}`, title: step.instruction, body: step.expected_state, hint: 'Tap check when done · "repeat" · "help"' };
+  if (step.safety_gate) return { kind: "gate", eyebrow: `SAFETY GATE · before step ${step.n}`, title: step.instruction, body: step.gate_requirement ?? step.expected_state, hint: "Tap check when it's done" };
+  return { kind: "step", eyebrow: `STEP ${step.n} OF ${total}`, title: step.instruction, body: step.expected_state, hint: "Tap check when done" };
 }
 
 function verdictCard(v: Verdict, step: Step, completed: boolean): Card {
@@ -681,8 +718,12 @@ function verdictCard(v: Verdict, step: Step, completed: boolean): Card {
 
 function friendly(e: any): string {
   const m: string = e?.message ?? String(e);
-  if (m.includes("503")) return "No API key yet. Open Settings and enter your Meta Model API key.";
+  // The backend answers 503 only when it has no Meta API key at all (none in backend/.env, none from
+  // Settings). A "503" inside some other error's text (an upstream outage) is not that.
+  if (e?.status === 503) return "No API key yet. Open Settings and enter your Meta Model API key.";
   if (m.includes("Network request failed")) return "Can't reach the backend. Check the URL in Settings and that uvicorn is running with --host 0.0.0.0.";
+  // For a failed Meta call the backend writes a sentence meant for the learner; drop the status prefix.
+  if (e?.status === 502 || e?.status === 504) return m.replace(/^\d{3}: /, "");
   return m;
 }
 

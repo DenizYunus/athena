@@ -6,6 +6,7 @@ client.responses.create(...) (streamed and not) and client.files.create(...).
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 from pathlib import Path
@@ -16,8 +17,9 @@ from PIL import Image
 
 
 class FakeStream:
-    def __init__(self, deltas: list[str]):
+    def __init__(self, deltas: list[str], ending: object | None = None):
         self._deltas = deltas
+        self._ending = ending  # an event to end with instead of response.completed
 
     def __aiter__(self):
         return self._gen()
@@ -29,6 +31,9 @@ class FakeStream:
         yield SimpleNamespace(type="response.output_item.added", output_index=0, item=SimpleNamespace(id="msg_fake", type="message"))
         for d in self._deltas:
             yield SimpleNamespace(type="response.output_text.delta", delta=d, **lane)
+        if self._ending is not None:
+            yield self._ending
+            return
         yield SimpleNamespace(type="response.output_text.done", text="".join(self._deltas), **lane)
         yield SimpleNamespace(type="response.completed", response=SimpleNamespace(status="completed"))
 
@@ -43,6 +48,11 @@ class FakeResponses:
     async def create(self, **kwargs):
         self.parent.calls.append(kwargs)
         model = kwargs.get("model", "")
+        delay = self.parent.sam_delay if model.startswith("sam") else self.parent.delay
+        if delay:
+            await asyncio.sleep(delay)
+        if self.parent.fail_with is not None:
+            raise self.parent.fail_with
         if model.startswith("sam"):
             concept = kwargs["input"][0]["content"][0]["text"]
             hit = self.parent.sam_hits is None or concept in self.parent.sam_hits
@@ -51,7 +61,7 @@ class FakeResponses:
         if fmt.get("name") == "CompiledSkill":
             return SimpleNamespace(output_text=self.parent.next_compiled)
         if kwargs.get("stream"):
-            return FakeStream(self.parent.next_deltas)
+            return FakeStream(self.parent.next_deltas, self.parent.next_ending)
         return SimpleNamespace(output_text=self.parent.next_output_text)
 
 
@@ -108,8 +118,12 @@ class FakeClient:
         self.calls: list[dict] = []
         self.uploads: list[dict] = []
         self.sam_hits: set[str] | None = None  # None: every concept hits
+        self.fail_with: Exception | None = None  # raised by every responses.create call when set
+        self.delay = 0.0  # seconds each non-SAM responses.create call waits, to overlap requests
+        self.sam_delay = 0.0  # seconds each SAM call waits
         self.next_compiled = json.dumps(COMPILED_EXAMPLE)
         self.next_deltas = ["Yes, ", "that's the relay. ", "Grip the body."]
+        self.next_ending: object | None = None  # e.g. an "error" event to end the guide stream with
         self.next_output_text = json.dumps(
             {
                 "status": "pass",
@@ -132,6 +146,14 @@ class FakeClient:
 @pytest.fixture
 def fake_client() -> FakeClient:
     return FakeClient()
+
+
+def api_status_error(cls, status: int):
+    """An openai SDK status error as the real client raises it."""
+    import httpx
+
+    response = httpx.Response(status, request=httpx.Request("POST", "https://api.meta.ai/v1/responses"))
+    return cls(f"Error code: {status} - upstream detail", response=response, body=None)
 
 
 @pytest.fixture

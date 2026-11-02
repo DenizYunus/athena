@@ -8,11 +8,16 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
+import httpx
+import openai
+import pydantic
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, StreamingResponse
+from PIL import UnidentifiedImageError
 
 from . import asr, guide, sam
 from .compiler import Capture, compile_skill
+from .config import settings
 from .meta_client import get_client
 from .schemas import (
     Highlight,
@@ -40,6 +45,39 @@ def meta_client(x_model_api_key: str | None = Header(default=None)) -> Any:
         return get_client(x_model_api_key)
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
+
+
+def _failure(exc: Exception) -> tuple[int, str]:
+    """The status and the sentence the app shows when a Meta call or an upload fails.
+
+    The sentence never carries an upstream status code: app builds up to 0.4.0 read any "503" in an
+    error as "no API key". The full exception goes to the log, which the recording plan uses as a monitor.
+    """
+    log.warning("request failed: %s: %s", type(exc).__name__, exc)
+    if isinstance(exc, (openai.AuthenticationError, openai.PermissionDeniedError)):
+        return 502, "The Meta API rejected the API key. Check it in Settings."
+    if isinstance(exc, openai.RateLimitError):
+        return 502, "The Meta API is rate limiting requests. Wait a few seconds and try again."
+    if isinstance(exc, (openai.APITimeoutError, httpx.TimeoutException, TimeoutError)):
+        return 504, "The Meta API took too long to answer. Try again."
+    if isinstance(exc, (openai.APIConnectionError, httpx.TransportError)):
+        return 502, "The backend could not reach the Meta API. Check the Mac's internet connection."
+    if isinstance(exc, openai.BadRequestError):
+        return 502, "The Meta API refused this request. Try again with a new photo or clip."
+    if isinstance(exc, openai.OpenAIError):
+        return 502, "The Meta API had a problem answering. Try again in a moment."
+    if isinstance(exc, UnidentifiedImageError):
+        return 422, "The photo could not be read as an image. Take it again."
+    if isinstance(exc, pydantic.ValidationError):
+        return 502, "The answer from the Meta API did not have the expected shape. Try again."
+    if isinstance(exc, (RuntimeError, ValueError)):
+        return 502, str(exc)[:300]
+    return 500, f"The backend failed: {type(exc).__name__}. The backend terminal has the details."
+
+
+def _http_failure(exc: Exception) -> HTTPException:
+    status, message = _failure(exc)
+    return HTTPException(status, message)
 
 
 def _skill_or_404(skill_id: str) -> Skill:
@@ -150,8 +188,8 @@ async def compile_endpoint(
         raise HTTPException(422, "send at least one photo or note")
     try:
         skill, media = await compile_skill(client, captures, author=author, title_hint=title_hint)
-    except (ValueError, RuntimeError) as exc:
-        raise HTTPException(502, str(exc)) from exc
+    except Exception as exc:
+        raise _http_failure(exc) from exc
     skills.save(skill, media)
     return skills.get(skill.id) or skill
 
@@ -251,7 +289,7 @@ async def session_turn(
                     yield event({"delta": delta})
                 yield event({"done": True, "current_step": session.current_step})
             except Exception as exc:  # the phone shows this in a bubble
-                yield event({"error": str(exc)[:300]})
+                yield event({"error": _failure(exc)[1]})
 
         return StreamingResponse(sse(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -261,7 +299,10 @@ async def session_turn(
         raise HTTPException(502, str(exc)) from exc
     if nothing_to_answer(heard):
         raise HTTPException(422, NOTHING)
-    reply = await guide.turn(client, skill, session, heard, guide_clip, photo_bytes)
+    try:
+        reply = await guide.turn(client, skill, session, heard, guide_clip, photo_bytes)
+    except Exception as exc:
+        raise _http_failure(exc) from exc
     return TurnResponse(reply=reply, transcript=heard, current_step=session.current_step, session_id=session.id)
 
 
@@ -269,18 +310,24 @@ async def session_turn(
 async def session_verify(
     session_id: str,
     photo: UploadFile = File(...),
+    step_n: int | None = Form(default=None, alias="step"),
     highlight: bool = True,
     client: Any = Depends(meta_client),
 ) -> VerifyResponse:
     """Snapshot check. Advances on pass; safety gates only ever advance on pass.
 
     SAM 3.1 runs on the same photo in parallel so a fail or unclear verdict can
-    point at the part in question.
+    point at the part in question. The app sends the step on its screen as `step`
+    (builds up to 0.4.0 do not; then the session's current step is checked).
     """
     session = _session_or_404(session_id)
     if session.completed:
         raise HTTPException(409, "session is complete")
     skill = _skill_or_404(session.skill_id)
+    if step_n is not None and step_n != session.current_step:
+        # The photo was taken for a step the session has already left (a check that finished after
+        # the app stopped waiting). Judging it against the current step would credit the wrong step.
+        raise HTTPException(409, f"This photo was for step {step_n}, but the session is on step {session.current_step}.")
     step = skill.step(session.current_step)
     photo_bytes = await photo.read()
     if not photo_bytes:
@@ -290,17 +337,25 @@ async def session_verify(
         if not highlight or not step.sam_concepts:
             return None
         try:
-            return await sam.highlight(client, photo_bytes, step.sam_concepts)
+            return await asyncio.wait_for(sam.highlight(client, photo_bytes, step.sam_concepts), settings.highlight_timeout_s)
         except Exception:
             return None
 
-    verdict, found = await asyncio.gather(
-        guide.verify(client, skill, session, photo_bytes, media_dir=skills.directory), _highlight()
-    )
-    session.verdicts.append(VerdictRecord(step=session.current_step, verdict=verdict))
+    try:
+        verdict, found = await asyncio.wait_for(
+            asyncio.gather(guide.verify(client, skill, session, photo_bytes, media_dir=skills.directory, step=step), _highlight()),
+            settings.check_deadline_s,
+        )
+    except Exception as exc:
+        raise _http_failure(exc) from exc
+    # The verdict belongs to the step that was judged. Another check on this session (a double tap,
+    # or a retry after the app stopped waiting) may have moved it on during the model call; only a
+    # pass for the step the session is still on advances it, so a gate is never passed by a verdict
+    # about the step before it.
+    session.verdicts.append(VerdictRecord(step=step.n, verdict=verdict))
 
     advanced = False
-    if verdict.status == "pass":
+    if verdict.status == "pass" and not session.completed and session.current_step == step.n:
         advanced = True
         last = max(s.n for s in skill.steps)
         if session.current_step >= last:
@@ -333,7 +388,10 @@ async def session_highlight(
     if not photo_bytes:
         raise HTTPException(422, "empty photo")
     concepts = [concept] if concept.strip() else step.sam_concepts
-    return await sam.highlight(client, photo_bytes, concepts)
+    try:
+        return await asyncio.wait_for(sam.highlight(client, photo_bytes, concepts), settings.check_deadline_s)
+    except Exception as exc:
+        raise _http_failure(exc) from exc
 
 
 @app.post("/sessions/{session_id}/skip", response_model=Session)
