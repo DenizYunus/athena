@@ -23,9 +23,15 @@ export function PrimaryButton({ label, onPress, disabled, style }: { label: stri
   );
 }
 
-export function GhostButton({ label, onPress, color = colors.text, style }: { label: string; onPress: () => void; color?: string; style?: ViewStyle }) {
+export function GhostButton({ label, onPress, color = colors.text, style, disabled }: { label: string; onPress: () => void; color?: string; style?: ViewStyle; disabled?: boolean }) {
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [s.ghost, pressed && { opacity: 0.7 }, style]} accessibilityRole="button">
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      style={({ pressed }) => [s.ghost, disabled && { opacity: 0.5 }, pressed && { opacity: 0.7 }, style]}
+      accessibilityRole="button"
+      accessibilityState={{ disabled: !!disabled }}
+    >
       <Text style={[s.ghostText, { color }]}>{label}</Text>
     </Pressable>
   );

@@ -11,15 +11,15 @@ The sink skill carries the session scenes because any home can do it for real in
 | Time | Scene | On screen | Narration (spoken) | Lower third | Clip |
 |---|---|---|---|---|---|
 | 0:00–0:12 | Cold open | Over-the-shoulder: a hand opens the sink cabinet, water pooled in the basin. Cut to a fridge pulled out from the wall. Caption fades in: *The know-how is in someone else's head.* | A clogged sink. A fridge that won't start. Someone knows exactly how to fix it, and it isn't you. | — | F1, F2 |
-| 0:12–0:20 | Title | Athena mark (amber diamond) and the line *Camera-verified skills*. Under it, small: *Meta Global AI Developer Hackathon · built Oct 27–Nov 4, 2026*. | Athena turns an expert's photos into a skill your phone walks you through, and checks, step by step. | — | title card |
-| 0:20–0:50 | Teach a skill | Home → **Teach a skill**. Shutter three or four times (thumbnails fill the strip). Hold the mic: the live transcript appears as the expert talks. Tap **Compile**; the hint reads *Muse Spark is writing the steps, gates and checks…*. Review screen: title, *safety gate detected* card, steps with reference thumbnails, *gate* / *watch me* / *SAM:* chips, vocabulary line. | The expert photographs the job in order and says what they did. One Muse Spark call turns that into a skill: ordered steps, what a photo must show for each one, which step is a safety gate, the common mistakes, and the words a learner might say. Published in about twenty seconds. | `muse-voice-transcribe-1.0 · realtime dictation` then `muse-spark-1.3 · structured output → skill` | A1, A2 |
+| 0:12–0:20 | Title | Athena mark (amber diamond) and the line *Camera-verified skills*. Under it, small: *Meta Global AI Developer Hackathon · built Oct 27–Nov 4, 2026*. | Athena turns an expert's video into a skill your phone walks you through, and checks, step by step. | — | title card |
+| 0:20–0:50 | Teach a skill | Home → **Teach a skill**. **Choose the video**: the job video from the phone's Downloads. **Add the manual (PDF)**. **Digest the video**: the upload bar, then the progress line (*Muse Spark is watching the video…*, *Picking a reference frame for each step.*), jump-cut. Review screen: *Digested by Muse Spark · published* with the video length and the manual's name, the conflicts card (*The video and the document disagree on…*), a gate with the *document* chip and *The document asks for this; the video does not show it.*, steps with frames from the video and *at 1:12* chips. Tap ▶ on one frame: the expert's own clip plays for three seconds. | The expert films the job, talks through it, and adds the manual. Muse Spark watches the video and reads the manual: ordered steps, what a photo must show for each, the manual's safety step as a gate even though the video skipped it, and where the two disagree. SAM picks a reference frame for every step. | `muse-spark-1.3 · video + manual → skill` then `sam-3.1 · reference frame per step` | A1, A2 |
 | 0:50–1:00 | Marketplace | Home: the new skill with the *yours* chip next to the seed skills. Open **Unclog a bathroom sink by cleaning the P-trap**: stats, tools, the gate card, steps with thumbnails. Tap **Install & start**. | A learner installs it like any app. Six steps, one gate, no parts. | — | B1 |
 | 1:00–1:20 | Gate refused | Session opens on step 1; the guide bubble says *Safety gate before we start…* and speaks it. The cabinet has **no bucket**. Tap ✓. Verdict bubble: *Can't confirm the gate yet · … Show me: …* (sky blue) or *Not yet · … Fix: …* (coral). Open **Steps**: no *Skip step* button on a gate. | The first step is a gate. No bucket under the trap, no progress. The verifier returns a structured verdict, not a chat message: unclear, and exactly which photo would settle it. Gates cannot be skipped. *(If the verdict is "Not yet": …not yet, and exactly what to change.)* | `muse-spark-1.3 · verifier · strict JSON verdict` | C1 |
 | 1:20–1:30 | Gate passed | Bucket placed under the trap. Tap ✓. *Verified* bubble, teal. The photo overlay appears with the bucket outlined and the label *Verified · bucket*. Progress bar turns teal on step 1. | Bucket in place: verified. SAM 3.1 outlines what it matched on your own photo. | `sam-3.1 · mask on the learner's photo` | C2 |
 | 1:30–1:55 | Push to talk | Tap the amber button, point at the trap, ask *"Which nut do I loosen first, the one near the wall or the one under the sink?"*, tap send. Hint: *Sending the clip…* → *Transcribing what you said…* → the words appear in the user bubble → *The guide is looking at your clip…* → the reply streams into the guide bubble and is spoken. Let the phone's voice be heard for two or three seconds. | Questions are a video clip plus your voice. The clip's audio is transcribed first, biased to the skill's vocabulary, then Muse Spark watches the clip and answers in a sentence, out loud. | `muse-voice-transcribe-1.0 · clip audio → transcript` then `muse-spark-1.3 · clip + transcript → spoken reply` | C3 |
 | 1:55–2:15 | Fail, fix, pass | Step 2 with only **one** slip nut loosened. Tap ✓: *Not yet · …* with the fix, and the overlay *Look here · white plastic nut* on the tight nut. Loosen the second nut. Tap ✓: *Verified*. Progress advances. | Only one nut loosened? Not yet, and here is the fix, with the part outlined. Fix it, check again, pass. | `sam-3.1` then `muse-spark-1.3 · verifier` | C4 |
 | 2:15–2:30 | Fridge gate | Fridge skill, step 1. Plug **still in** the outlet: tap ✓, refused. Plug out, outlet in the same frame: tap ✓, *Verified*. | Same loop, different domain. The fridge skill's gate wants the plug out and the outlet in the same frame. Plug in: refused. Plug out: verified. It never infers what it cannot see. | `muse-spark-1.3 · safety gate` | D1, D2 |
-| 2:30–2:45 | Under the hood | Quick cuts: the README models table; terminal `pytest` → *74 passed*; `git log` with dates from Oct 27 on; the Releases page with the APK. | Four Meta models. Muse Spark guides, and compiles and verifies with strict JSON. SAM 3.1 finds the part. Voice Transcribe hears you. Muse Image drew the seed reference photos. FastAPI, Expo, seventy-four tests, all built this week. | `muse-image-1.0 · seed reference photos` | E1–E4 |
+| 2:30–2:45 | Under the hood | Quick cuts: the README models table; terminal `pytest` → *131 passed*; `git log` with dates from Oct 27 on; the Releases page with the APK. | Four Meta models. Muse Spark watches, guides, and verifies with strict JSON. SAM 3.1 finds the part. Voice Transcribe hears you. Muse Image drew the seed reference photos. FastAPI, Expo, a hundred and thirty-one tests, all built this week. | `muse-image-1.0 · seed reference photos` | E1–E4 |
 | 2:45–2:55 | Close | The session with the Glasses pill on in the emulator (clip G2 in the plan): the pill turns to *Glasses ✓*, the preview switches to the glasses stream. End card: Athena · github.com/DenizYunus/athena. Do not show the glasses artboards from `design/`: they carry spoken commands ("done", "skip") and an automatic capture that the app does not have. | The glasses bridge already runs on Meta's mock device kit. Next: real Ray-Ban Meta glasses, hands free. Athena. Expert know-how, verified by camera. | — | G2, end card |
 
 Narration is about 300 words, which is two minutes of speech at a calm pace inside a 2:55 cut. The remaining time is for the phone's own voice (the guide speaking) and short pauses on each verdict. Do not fill the gaps.
@@ -28,9 +28,9 @@ Narration is about 300 words, which is two minutes of speech at a calm pace insi
 
 > A clogged sink. A fridge that won't start. Someone knows exactly how to fix it, and it isn't you.
 >
-> Athena turns an expert's photos into a skill your phone walks you through, and checks, step by step.
+> Athena turns an expert's video into a skill your phone walks you through, and checks, step by step.
 >
-> The expert photographs the job in order and says what they did. One Muse Spark call turns that into a skill: ordered steps, what a photo must show for each one, which step is a safety gate, the common mistakes, and the words a learner might say. Published in about twenty seconds.
+> The expert films the job, talks through it, and adds the manual. Muse Spark watches the video and reads the manual: ordered steps, what a photo must show for each, the manual's safety step as a gate even though the video skipped it, and where the two disagree. SAM picks a reference frame for every step.
 >
 > A learner installs it like any app. Six steps, one gate, no parts.
 >
@@ -44,7 +44,7 @@ Narration is about 300 words, which is two minutes of speech at a calm pace insi
 >
 > Same loop, different domain. The fridge skill's gate wants the plug out and the outlet in the same frame. Plug in: refused. Plug out: verified. It never infers what it cannot see.
 >
-> Four Meta models. Muse Spark guides, and compiles and verifies with strict JSON. SAM 3.1 finds the part. Voice Transcribe hears you. Muse Image drew the seed reference photos. FastAPI, Expo, seventy-four tests, all built this week.
+> Four Meta models. Muse Spark watches, guides, and verifies with strict JSON. SAM 3.1 finds the part. Voice Transcribe hears you. Muse Image drew the seed reference photos. FastAPI, Expo, a hundred and thirty-one tests, all built this week.
 >
 > The glasses bridge already runs on Meta's mock device kit. Next: real Ray-Ban Meta glasses, hands free. Athena. Expert know-how, verified by camera.
 
@@ -54,8 +54,8 @@ Title card: **Athena** / Camera-verified skills / Meta Global AI Developer Hacka
 
 Lower thirds (monospace model id, then a plain-language role):
 
-- `muse-voice-transcribe-1.0` · realtime dictation
-- `muse-spark-1.3` · structured output → skill
+- `muse-spark-1.3` · video + manual → skill
+- `sam-3.1` · reference frame per step
 - `muse-spark-1.3` · verifier · strict JSON verdict
 - `sam-3.1` · mask on the learner's photo
 - `muse-voice-transcribe-1.0` · clip audio → transcript
@@ -63,20 +63,21 @@ Lower thirds (monospace model id, then a plain-language role):
 - `muse-spark-1.3` · safety gate
 - `muse-image-1.0` · seed reference photos
 
-Captions (one line, bottom right, only where the narration needs a number on screen): *74 tests* at 2:34; *github.com/DenizYunus/athena* from 2:45 to the end.
+Captions (one line, bottom right, only where the narration needs a number on screen): *131 tests* at 2:34; *github.com/DenizYunus/athena* from 2:45 to the end.
 
 End card: **Athena** · github.com/DenizYunus/athena · APK on the Releases page
 
 ## What the video must not claim
 
 - No "live video call with the AI". The Model API has no realtime video session; the app sends clips and photos. The narration says "watches the clip".
-- No tool calling. The verifier and the compiler use structured output, and the app's own check loop is the agentic part. Say "structured verdict", not "function calls".
+- No "learns from any YouTube video". The Model API takes MP4 files, and the author uploads a video they filmed or may use. Say "a video of the job".
+- No tool calling. The verifier and the digester use structured output, and the app's own check loop is the agentic part. Say "structured verdict", not "function calls".
 - No real-expert attribution. The seed skills are written by us with generated reference photos; the author in the demo is you, playing the expert.
 - Nothing about health, medicine, diet or wellness.
 
 ## If a scene will not cooperate on the day
 
-- Live dictation transcript does not appear in Teach a skill: type the note. Change the narration to "and describes what they did". The compiler scene still works.
+- The digest is slow or fails on the day: digest the video off camera beforehand and, for A2, open that skill's review from the marketplace's *yours* entry; record A1 only up to the progress line. The narration does not change.
 - The gate verdict comes back as *Not yet* instead of *Can't confirm*: use the alternate narration line in the table. Both are structured verdicts.
 - The guide's spoken reply is too quiet in the recording: keep the bubble on screen and let the narration carry it; mention "out loud" anyway, it is true.
 - SAM finds nothing on a photo (no overlay): the verdict bubble still shows. Retake with the part filling more of the frame; plain objects (bucket, white nut) are reliable.

@@ -13,8 +13,9 @@ import { RecordingPresets, setAudioModeAsync, useAudioRecorder, type RecordingOp
 import { CameraView, useCameraPermissions, useMicrophonePermissions } from "expo-camera";
 import * as Speech from "expo-speech";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Api, Highlight, Session, Skill, Step, Verdict, VerifyResponse } from "../api";
+import { ClipPlayer } from "../ClipPlayer";
 import { useGlasses, type Card, type GlassesState } from "../glasses";
 import { HighlightOverlay } from "../HighlightOverlay";
 import { colors } from "../theme";
@@ -56,6 +57,8 @@ export function SessionScreen({
   const [showSteps, setShowSteps] = useState(false);
   const [stage, setStage] = useState<"" | "uploading" | "transcribing" | "thinking">("");
   const [overlay, setOverlay] = useState<{ photoUri: string; highlight: Highlight; color: string; caption: string } | null>(null);
+  // The expert's clip playing from the steps sheet (digested skills only).
+  const [expertClip, setExpertClip] = useState<{ uri: string; n: number } | null>(null);
   const nextId = useRef(1);
   const recordingPromise = useRef<Promise<{ uri: string } | undefined> | null>(null);
   const secondsRef = useRef(0);
@@ -475,6 +478,17 @@ export function SessionScreen({
 
   const dismissOverlay = useCallback(() => setOverlay(null), []);
 
+  /** Steps sheet: play the expert doing this step. The guide stops talking first, since the clip
+   *  has its own sound. stopSpeech moves the utterance number on, so the stopped utterance no longer
+   *  settles the phase; like every other caller of stopSpeech, this sets the phase itself. */
+  function watchExpert() {
+    const uri = api.mediaUrl(skill.id, step.clip ?? null);
+    if (!uri || (phase !== "idle" && phase !== "speaking") || glassesOpRef.current) return;
+    stopSpeech();
+    if (phaseRef.current === "speaking") setPhase("idle");
+    setExpertClip({ uri, n: step.n });
+  }
+
   if (!camPerm?.granted) {
     return (
       <View style={s.center}>
@@ -602,18 +616,36 @@ export function SessionScreen({
 
       {showSteps ? (
         <View style={s.sheet}>
-          <Text style={s.sheetTitle}>
-            Step {step.n} of {total}
-            {step.safety_gate ? "  · SAFETY GATE" : ""}
-          </Text>
-          <Text style={s.sheetText}>{step.instruction}</Text>
-          <Text style={s.sheetLabel}>Done looks like</Text>
-          <Text style={s.sheetText}>{step.expected_state}</Text>
-          {step.common_mistakes.length ? (
-            <>
-              <Text style={s.sheetLabel}>Watch out</Text>
-              <Text style={s.sheetText}>{step.common_mistakes.join(". ")}</Text>
-            </>
+          {/* Scrolls when a long step (with the manual's note) would push the sheet off the top. */}
+          <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={{ gap: 6 }}>
+            <Text style={s.sheetTitle}>
+              Step {step.n} of {total}
+              {step.safety_gate ? "  · SAFETY GATE" : ""}
+            </Text>
+            <Text style={s.sheetText}>{step.instruction}</Text>
+            <Text style={s.sheetLabel}>Done looks like</Text>
+            <Text style={s.sheetText}>{step.expected_state}</Text>
+            {step.common_mistakes.length ? (
+              <>
+                <Text style={s.sheetLabel}>Watch out</Text>
+                <Text style={s.sheetText}>{step.common_mistakes.join(". ")}</Text>
+              </>
+            ) : null}
+            {step.document_note ? (
+              <>
+                <Text style={s.sheetLabel}>From the manual</Text>
+                <Text style={s.sheetText}>{step.document_note}</Text>
+              </>
+            ) : null}
+          </ScrollView>
+          {step.clip ? (
+            <GhostButton
+              label="Watch the expert"
+              onPress={watchExpert}
+              color={colors.amber}
+              disabled={(phase !== "idle" && phase !== "speaking") || glassesOp !== null}
+              style={{ marginTop: 12 }}
+            />
           ) : null}
           <View style={{ flexDirection: "row", gap: 10, marginTop: 14 }}>
             <GhostButton label="Close" onPress={() => setShowSteps(false)} style={{ flex: 1 }} />
@@ -624,6 +656,7 @@ export function SessionScreen({
       ) : null}
 
       {overlay ? <HighlightOverlay photoUri={overlay.photoUri} highlight={overlay.highlight} color={overlay.color} caption={overlay.caption} onDismiss={dismissOverlay} /> : null}
+      {expertClip ? <ClipPlayer key={expertClip.uri} uri={expertClip.uri} title={`STEP ${expertClip.n} · THE EXPERT`} onClose={() => setExpertClip(null)} /> : null}
     </View>
   );
 }
@@ -756,7 +789,7 @@ const s = StyleSheet.create({
   bigBtn: { width: 84, height: 84, borderRadius: 42, borderWidth: 5, alignItems: "center", justifyContent: "center" },
   micIcon: { width: 16, height: 30, borderRadius: 8, backgroundColor: colors.onAmber },
   stopIcon: { width: 28, height: 28, borderRadius: 6, backgroundColor: colors.bg },
-  sheet: { position: "absolute", left: 12, right: 12, bottom: 160, padding: 18, borderRadius: 18, backgroundColor: "rgba(15,17,21,0.96)", borderWidth: 1, borderColor: colors.border, gap: 6 },
+  sheet: { position: "absolute", left: 12, right: 12, bottom: 160, maxHeight: "66%", padding: 18, borderRadius: 18, backgroundColor: "rgba(15,17,21,0.96)", borderWidth: 1, borderColor: colors.border, gap: 6 },
   sheetTitle: { color: colors.amber, fontSize: 12, fontWeight: "700", letterSpacing: 0.5 },
   sheetLabel: { color: colors.muted, fontSize: 11, fontWeight: "600", textTransform: "uppercase", letterSpacing: 0.6, marginTop: 8 },
   sheetText: { color: colors.text, fontSize: 15, lineHeight: 21 },

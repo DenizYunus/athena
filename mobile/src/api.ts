@@ -12,7 +12,26 @@ export type Step = {
   watch_me: boolean;
   est_minutes: number;
   common_mistakes: string[];
+  // Set only on skills digested from a video (POST /skills/digest); seed skills and photo-compiled
+  // skills leave them out or null.
+  /** Where the step came from: the video, the expert's document, both, or a hazard-removal gate
+   *  neither covers that Athena added. */
+  source?: StepSource | null;
+  /** Seconds into the expert's video where the step starts and ends. */
+  video_start_s?: number | null;
+  video_end_s?: number | null;
+  /** The expert doing this step, e.g. compiled/media/<id>/step_3.mp4 (load it with mediaUrl). */
+  clip?: string | null;
+  /** Specs and cautions from the expert's document for this step; empty when there are none. */
+  document_note?: string;
 };
+
+export type StepSource = "video" | "document" | "both" | "added";
+
+/** A point where the expert's video and written procedure disagree, and what the skill used. */
+export type Conflict = { topic: string; video_says: string; document_says: string; resolution: string };
+
+export type DigestInfo = { video_seconds: number; chunks: number; documents: string[] };
 
 export type Skill = {
   id: string;
@@ -27,7 +46,32 @@ export type Skill = {
   vocabulary: string[];
   steps: Step[];
   compiled: boolean;
+  conflicts?: Conflict[];
+  /** Set when the skill was digested from a video. */
+  digest?: DigestInfo | null;
 };
+
+export type DigestStage = "queued" | "preparing" | "uploading" | "reading" | "merging" | "frames" | "saving" | "done" | "failed";
+
+/** A video digest running on the backend (GET /skills/digest/{id}). `message` is one sentence for
+ *  the progress line; `error` is a sentence too, never a status code. */
+export type DigestJob = {
+  id: string;
+  status: "running" | "done" | "failed";
+  stage: DigestStage;
+  message: string;
+  progress: number;
+  chunks_total: number;
+  chunks_done: number;
+  video_seconds: number;
+  documents: string[];
+  skill: Skill | null;
+  error: string | null;
+  created_at: string;
+};
+
+/** A file the document picker returned. */
+export type PickedFile = { uri: string; name: string; mimeType?: string; size?: number };
 
 export type Session = {
   id: string;
@@ -80,6 +124,25 @@ function clipPart(uri: string): { name: string; type: string } {
   return { name: "clip.mp4", type: "video/mp4" };
 }
 
+const VIDEO_TYPES: Record<string, string> = {
+  mp4: "video/mp4",
+  m4v: "video/x-m4v",
+  mov: "video/quicktime",
+  webm: "video/webm",
+  mkv: "video/x-matroska",
+  "3gp": "video/3gpp",
+  avi: "video/x-msvideo",
+};
+
+/** The multipart type for the author's video. The backend accepts any video/* type or a known
+ *  video extension; a picker that reports no type (or a generic one) still gets a video type here,
+ *  so a file named without an extension is not turned away. */
+function videoPartType(file: PickedFile): string {
+  if (file.mimeType?.startsWith("video/")) return file.mimeType;
+  const ext = file.name.toLowerCase().split(".").pop() ?? "";
+  return VIDEO_TYPES[ext] ?? "video/mp4";
+}
+
 export class ApiError extends Error {
   constructor(message: string, public status?: number) {
     super(message);
@@ -109,7 +172,7 @@ export class Api {
     return this.url("/asr").replace(/^http/, "ws");
   }
 
-  /** Where a step's reference photo can be loaded from, or null. */
+  /** Where a step's reference photo or expert clip can be loaded from, or null. */
   mediaUrl(skillId: string, reference: string | null): string | null {
     if (!reference) return null;
     if (/^https?:\/\//.test(reference)) return reference;
@@ -119,18 +182,47 @@ export class Api {
 
   /** POST a multipart form and parse the JSON reply. React Native's XMLHttpRequest accepts
    *  `{ uri, name, type }` file parts; the `fetch` that Expo SDK 58 installs globally does not
-   *  (its FormData conversion only takes strings and Blobs), so every upload goes through here. */
-  private multipart<T>(path: string, form: FormData, timeoutMs = 120000): Promise<T> {
+   *  (its FormData conversion only takes strings and Blobs), so every upload goes through here.
+   *  `onUploadProgress` gets bytes sent so far and the body's length (0 when the runtime does not
+   *  know it); `signal` aborts the upload. */
+  private multipart<T>(
+    path: string,
+    form: FormData,
+    timeoutMs = 120000,
+    opts: { onUploadProgress?: (sent: number, total: number) => void; signal?: AbortSignal } = {},
+  ): Promise<T> {
     const url = this.url(path);
     const headers = this.headers();
     return new Promise<T>((resolve, reject) => {
+      if (opts.signal?.aborted) {
+        reject(new ApiError("The upload was cancelled"));
+        return;
+      }
       const xhr = new XMLHttpRequest();
       xhr.open("POST", url);
       for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
       xhr.timeout = timeoutMs;
-      xhr.onerror = () => reject(new ApiError("Network request failed"));
-      xhr.ontimeout = () => reject(new ApiError("The backend took too long to answer"));
+      const onAbort = () => xhr.abort();
+      opts.signal?.addEventListener("abort", onAbort);
+      const done = () => opts.signal?.removeEventListener("abort", onAbort);
+      if (opts.onUploadProgress) {
+        const report = opts.onUploadProgress;
+        xhr.upload.onprogress = (e) => report(e.loaded, e.lengthComputable && e.total > 0 ? e.total : 0);
+      }
+      xhr.onabort = () => {
+        done();
+        reject(new ApiError("The upload was cancelled"));
+      };
+      xhr.onerror = () => {
+        done();
+        reject(new ApiError("Network request failed"));
+      };
+      xhr.ontimeout = () => {
+        done();
+        reject(new ApiError("The backend took too long to answer"));
+      };
       xhr.onload = () => {
+        done();
         const text = xhr.responseText || "";
         if (xhr.status < 200 || xhr.status >= 300) {
           let detail = xhr.statusText || `HTTP ${xhr.status}`;
@@ -342,5 +434,39 @@ export class Api {
     });
     withoutPhoto.forEach((c) => form.append("notes", c.note));
     return this.multipart("/skills/compile", form, 300000);
+  }
+
+  /** Upload the expert's video (and up to three PDFs of the written procedure) and start a digest.
+   *  The backend checks the files, answers 202 with the job, and keeps working after this returns;
+   *  poll getDigest for progress. `onUploadProgress` gets the fraction of the upload sent (0..1).
+   *  The timeout is long because a video of up to 1 GB may go over a slow Wi-Fi link. */
+  startDigest(
+    video: PickedFile,
+    documents: PickedFile[],
+    author: string,
+    titleHint: string,
+    onUploadProgress?: (fraction: number) => void,
+    signal?: AbortSignal,
+  ): Promise<DigestJob> {
+    const form = new FormData();
+    form.append("author", author);
+    form.append("title_hint", titleHint);
+    form.append("video", { uri: video.uri, name: video.name || "video.mp4", type: videoPartType(video) } as any);
+    for (const d of documents) form.append("documents", { uri: d.uri, name: d.name || "procedure.pdf", type: "application/pdf" } as any);
+    // When the runtime cannot say how long the body is, the picked files' sizes stand in for it
+    // (the form fields and multipart framing are a few hundred bytes).
+    const known = (video.size ?? 0) + documents.reduce((sum, d) => sum + (d.size ?? 0), 0);
+    const report = onUploadProgress
+      ? (sent: number, total: number) => {
+          const whole = total > 0 ? total : known;
+          if (whole > 0) onUploadProgress(Math.min(1, Math.max(0, sent / whole)));
+        }
+      : undefined;
+    return this.multipart<DigestJob>("/skills/digest", form, 30 * 60 * 1000, { onUploadProgress: report, signal });
+  }
+
+  async getDigest(jobId: string): Promise<DigestJob> {
+    const res = await fetch(this.url(`/skills/digest/${encodeURIComponent(jobId)}`), { headers: this.headers() });
+    return this.handle(res);
   }
 }

@@ -5,8 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import shutil
+import tempfile
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 import httpx
 import openai
@@ -15,11 +20,12 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadF
 from fastapi.responses import FileResponse, StreamingResponse
 from PIL import UnidentifiedImageError
 
-from . import asr, guide, sam
+from . import asr, digest, guide, sam
 from .compiler import Capture, compile_skill
 from .config import settings
 from .meta_client import get_client
 from .schemas import (
+    DigestJob,
     Highlight,
     Session,
     Skill,
@@ -29,7 +35,7 @@ from .schemas import (
     VerdictRecord,
     VerifyResponse,
 )
-from .store import SessionStore, SkillStore
+from .store import DigestJobStore, SessionStore, SkillStore
 
 log = logging.getLogger("athena")
 
@@ -37,6 +43,10 @@ app = FastAPI(title="Athena", version="0.2.0")
 
 skills = SkillStore()
 sessions = SessionStore()
+digest_jobs = DigestJobStore()
+# The event loop keeps only a weak reference to a task; a digest running in the background must not
+# be garbage-collected halfway, so each one stays here until it finishes.
+_digest_tasks: set[asyncio.Task] = set()
 
 
 def meta_client(x_model_api_key: str | None = Header(default=None)) -> Any:
@@ -73,6 +83,17 @@ def _failure(exc: Exception) -> tuple[int, str]:
     if isinstance(exc, (RuntimeError, ValueError)):
         return 502, str(exc)[:300]
     return 500, f"The backend failed: {type(exc).__name__}. The backend terminal has the details."
+
+
+def _digest_failure(exc: Exception, with_documents: bool) -> str:
+    """The sentence for a failed digest job. _failure's sentence for a refused request asks for a new
+    photo or clip, which a digest never sends: a 400 here is about the video or the manuals."""
+    if isinstance(exc, openai.BadRequestError):
+        log.warning("digest refused: %s", exc)
+        if with_documents:
+            return "The Meta API refused the video or the manual. Try again without the manual, or with a shorter video."
+        return "The Meta API refused the video. Try a shorter video or another recording."
+    return _failure(exc)[1]
 
 
 def _http_failure(exc: Exception) -> HTTPException:
@@ -119,13 +140,23 @@ def get_skill(skill_id: str) -> Skill:
     return _skill_or_404(skill_id)
 
 
+MEDIA_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".mp4": "video/mp4",
+}
+
+
 @app.get("/skills/{skill_id}/media/{name}")
 def skill_media(skill_id: str, name: str) -> FileResponse:
+    """Reference photos and expert clips. FileResponse answers Range requests, which video players use."""
     _skill_or_404(skill_id)
     path = skills.media_path(skill_id, name)
     if path is None:
         raise HTTPException(404, "no such media")
-    return FileResponse(path, media_type="image/jpeg")
+    return FileResponse(path, media_type=MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream"))
 
 
 @app.delete("/skills/{skill_id}", status_code=204)
@@ -192,6 +223,171 @@ async def compile_endpoint(
         raise _http_failure(exc) from exc
     skills.save(skill, media)
     return skills.get(skill.id) or skill
+
+
+VIDEO_SUFFIXES = (".mp4", ".mov", ".m4v", ".webm", ".mkv", ".3gp", ".avi")
+COPY_CHUNK_BYTES = 1024 * 1024
+# PDF readers find the %PDF- header anywhere in a file's first 1024 bytes; some generators and mail
+# gateways put a byte-order mark or a blank line before it.
+PDF_HEADER_WINDOW = 1024
+
+
+def _size_text(n_bytes: int) -> str:
+    if n_bytes >= 1024**3 and n_bytes % 1024**3 == 0:
+        return f"{n_bytes // 1024**3} GB"
+    if n_bytes >= 1024**2:
+        return f"{n_bytes / 1024**2:.0f} MB"
+    return f"{max(1, round(n_bytes / 1024))} KB"
+
+
+def _minutes_text(seconds: float) -> str:
+    minutes = seconds / 60
+    return f"{minutes:.0f} minutes" if minutes == int(minutes) else f"{minutes:.1f} minutes"
+
+
+def _copy_upload(upload: UploadFile, target: Path, limit: int) -> int | None:
+    """Copy an upload to disk in chunks; the bytes written, or None once it passes `limit`.
+
+    Starlette has already spooled the body to a temporary file; reading it in chunks keeps a
+    1 GiB video out of memory. Runs in a worker thread so the event loop keeps serving polls."""
+    upload.file.seek(0)
+    total = 0
+    with target.open("wb") as out:
+        while chunk := upload.file.read(COPY_CHUNK_BYTES):
+            total += len(chunk)
+            if total > limit:
+                return None
+            out.write(chunk)
+    return total
+
+
+def _is_video(upload: UploadFile) -> bool:
+    name = (upload.filename or "").lower()
+    return (upload.content_type or "").lower().startswith("video/") or name.endswith(VIDEO_SUFFIXES)
+
+
+def _display_name(upload: UploadFile, fallback: str) -> str:
+    """The file name as the author knows it, without any folder part a client may send.
+
+    React Native percent-encodes multipart file names ("Brake%20pad%20manual.pdf"). Decoding comes
+    first, so the cut never splits an escape and a decoded %2F loses its folder part too."""
+    name = unquote(upload.filename or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    return name[:120] or fallback
+
+
+def _drop_head(path: Path, n_bytes: int) -> None:
+    """Rewrite a file without its first n_bytes, streamed (a manual can be 50 MB)."""
+    tmp = path.with_name(f".{path.name}.tmp")
+    with path.open("rb") as src, tmp.open("wb") as out:
+        src.seek(n_bytes)
+        shutil.copyfileobj(src, out, COPY_CHUNK_BYTES)
+    os.replace(tmp, path)
+
+
+async def _save_documents(documents: list[UploadFile], workdir: Path) -> list[digest.Document]:
+    if len(documents) > settings.digest_max_documents:
+        raise HTTPException(422, f"Add at most {settings.digest_max_documents} documents.")
+    saved: list[digest.Document] = []
+    for i, upload in enumerate(documents, start=1):
+        name = _display_name(upload, f"document {i}.pdf")
+        is_pdf_type = (upload.content_type or "").lower() == "application/pdf" or name.lower().endswith(".pdf")
+        if not is_pdf_type:
+            raise HTTPException(422, f"{name} is not a PDF. Add the manual as a PDF file.")
+        limit = settings.digest_max_document_bytes
+        if upload.size is not None and upload.size > limit:
+            raise HTTPException(422, f"{name} is larger than {_size_text(limit)}. Add a smaller PDF.")
+        path = workdir / f"document_{i}.pdf"
+        written = await asyncio.to_thread(_copy_upload, upload, path, limit)
+        if written is None:
+            raise HTTPException(422, f"{name} is larger than {_size_text(limit)}. Add a smaller PDF.")
+        with path.open("rb") as f:
+            header_at = f.read(PDF_HEADER_WINDOW).find(b"%PDF-")
+        if header_at < 0:
+            raise HTTPException(422, f"{name} is not a PDF. Add the manual as a PDF file.")
+        if header_at > 0:
+            # Meta gets a file that starts with the header; the PDF's own offsets count from there.
+            await asyncio.to_thread(_drop_head, path, header_at)
+        saved.append(digest.Document(name=name, path=path))
+    return saved
+
+
+async def _save_video(video: UploadFile, workdir: Path) -> tuple[Path, digest.VideoInfo]:
+    """The video on disk and what ffprobe says about it, or the HTTP error that tells the author what to fix."""
+    limit = settings.digest_max_upload_bytes
+    too_large = HTTPException(413, f"The video is larger than {_size_text(limit)}. Trim it or record a shorter one.")
+    if video.size is not None and video.size > limit:
+        raise too_large
+    suffix = Path(video.filename or "").suffix.lower()
+    path = workdir / f"upload{suffix if suffix in VIDEO_SUFFIXES else '.bin'}"
+    written = await asyncio.to_thread(_copy_upload, video, path, limit)
+    if written is None:
+        raise too_large
+    if written == 0:
+        raise HTTPException(422, "The video file is empty. Choose another video.")
+    try:
+        path, info = await digest.probe_upload(path)
+    except digest.VideoError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except digest.BackendTimeout as exc:  # a busy Mac, not a bad file
+        raise HTTPException(504, str(exc)) from exc
+    except RuntimeError as exc:  # ffprobe is missing on this Mac
+        raise HTTPException(500, str(exc)) from exc
+    if info.duration > settings.digest_max_video_s:
+        raise HTTPException(
+            422,
+            f"The video is longer than {_minutes_text(settings.digest_max_video_s)}. Trim it and try again.",
+        )
+    return path, info
+
+
+@app.post("/skills/digest", response_model=DigestJob, status_code=202)
+async def digest_endpoint(
+    video: UploadFile | None = File(default=None),
+    documents: list[UploadFile] = File(default=[]),
+    author: str = Form("Anonymous"),
+    title_hint: str = Form(""),
+    client: Any = Depends(meta_client),
+) -> DigestJob:
+    """A video of the job (and up to three PDFs of the written procedure) -> a digest job.
+
+    The upload is checked here, so a wrong file fails at once with a sentence; the digest itself
+    runs in the background for minutes, and the app polls GET /skills/digest/{job_id}."""
+    if video is None or (not video.filename and not video.size):
+        raise HTTPException(422, "Choose a video to upload.")
+    if not _is_video(video):
+        raise HTTPException(422, "The file is not a video. Choose an MP4, MOV or WebM file.")
+    workdir = Path(tempfile.mkdtemp(prefix="athena-digest-"))
+    try:
+        docs = await _save_documents(documents, workdir)
+        path, info = await _save_video(video, workdir)
+    except BaseException:
+        shutil.rmtree(workdir, ignore_errors=True)
+        raise
+
+    job = digest_jobs.create(video_seconds=round(info.duration, 2), documents=[d.name for d in docs])
+    inp = digest.DigestInput(
+        workdir=workdir, video=path, documents=docs, author=author, title_hint=title_hint, hdr=info.hdr
+    )
+
+    def publish(skill: Skill, media: dict) -> Skill:
+        skills.save(skill, media)
+        return skills.get(skill.id) or skill
+
+    task = asyncio.create_task(digest.run_job(job, client, inp, publish, lambda exc: _digest_failure(exc, bool(docs))))
+    _digest_tasks.add(task)
+    task.add_done_callback(_digest_tasks.discard)
+    # A copy: the answer says "queued" even if the task gets to run before the response is written.
+    return job.model_copy(deep=True)
+
+
+@app.get("/skills/digest/{job_id}", response_model=DigestJob)
+async def get_digest(job_id: str) -> DigestJob:
+    """Async on purpose: it runs on the event loop with the digest task, so a poll never sees a job
+    halfway through an update (a sync route would read it from a worker thread)."""
+    job = digest_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(404, "unknown digest job")
+    return job
 
 
 # ---------------------------------------------------------------- sessions

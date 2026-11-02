@@ -36,6 +36,14 @@ def _skill_summary(skill: Skill) -> str:
     )
 
 
+def _document_line(step: Step) -> str:
+    """Specs and cautions the expert's written procedure gives for this step, as a line of its own.
+
+    Empty for seed and photo-compiled skills, so their prompts stay exactly as they were."""
+    note = step.document_note.strip()
+    return f"From the expert's written procedure: {note}\n" if note else ""
+
+
 def guide_system_prompt(skill: Skill, step: Step) -> str:
     return f"""You are Athena, a hands-on repair guide. You are walking one person through a skill written by an expert. You see what they see through a short video clip or a photo they send with each question, and you hear their words as a transcript.
 
@@ -53,7 +61,7 @@ The skill, as JSON:
 Current step: {step.n}. Instruction: {step.instruction}
 What done looks like: {step.expected_state}
 Expert's notes for this step: {step.verify_hints or "none"}
-Common mistakes here: {"; ".join(step.common_mistakes) or "none"}
+{_document_line(step)}Common mistakes here: {"; ".join(step.common_mistakes) or "none"}
 {"THIS STEP IS A SAFETY GATE: " + (step.gate_requirement or step.expected_state) if step.safety_gate else ""}"""
 
 
@@ -70,7 +78,7 @@ Skill: {skill.title} (domain: {skill.domain}, by {skill.author})
 Step {step.n}: {step.instruction}
 A photo passes when it shows: {step.expected_state}
 Expert's verification notes: {step.verify_hints or "none"}
-Common mistakes to look for: {"; ".join(step.common_mistakes) or "none"}
+{_document_line(step)}Common mistakes to look for: {"; ".join(step.common_mistakes) or "none"}
 {gate}
 Rules:
 - "pass": the expected state is clearly visible. Confidence should be at least 0.8.

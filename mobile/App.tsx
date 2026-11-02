@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, View } from "react-native";
 import { Api, Session, Skill } from "./src/api";
 import { AuthorCaptureScreen } from "./src/screens/AuthorCapture";
+import { AuthorImportScreen } from "./src/screens/AuthorImport";
 import { AuthorReviewScreen } from "./src/screens/AuthorReview";
 import { MarketplaceScreen } from "./src/screens/Marketplace";
 import { SessionScreen } from "./src/screens/Session";
@@ -16,7 +17,10 @@ type Route =
   | { name: "settings" }
   | { name: "skill"; skill: Skill }
   | { name: "session"; skill: Skill; session: Session }
+  // Teach a skill: "author" uploads a video (and the manual); "authorPhotos" is the older
+  // photograph-each-step path, reached from the upload screen.
   | { name: "author" }
+  | { name: "authorPhotos" }
   | { name: "review"; skill: Skill };
 
 export default function App() {
@@ -57,7 +61,17 @@ export default function App() {
       screen = <SessionScreen api={api} skill={route.skill} session={route.session} onExit={() => setRoute({ name: "market" })} glassesMock={settings.glassesMock} />;
       break;
     case "author":
-      screen = <AuthorCaptureScreen api={api} onCompiled={(skill) => setRoute({ name: "review", skill })} onBack={() => setRoute({ name: "market" })} />;
+      screen = (
+        <AuthorImportScreen
+          api={api}
+          onCompiled={(skill) => setRoute({ name: "review", skill })}
+          onBack={() => setRoute({ name: "market" })}
+          onPhotos={() => setRoute({ name: "authorPhotos" })}
+        />
+      );
+      break;
+    case "authorPhotos":
+      screen = <AuthorCaptureScreen api={api} onCompiled={(skill) => setRoute({ name: "review", skill })} onBack={() => setRoute({ name: "author" })} />;
       break;
     case "review":
       screen = (

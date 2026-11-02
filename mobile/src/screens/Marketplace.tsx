@@ -39,7 +39,7 @@ export function MarketplaceScreen({ api, onOpen, onSettings, onCreate }: { api: 
       <Pressable onPress={onCreate} style={({ pressed }) => [s.teach, pressed && { opacity: 0.85 }]} accessibilityRole="button">
         <View style={{ flex: 1 }}>
           <Text style={s.teachTitle}>Teach a skill</Text>
-          <Text style={s.teachText}>Photograph the job, say what you did. Muse Spark writes the steps and the checks.</Text>
+          <Text style={s.teachText}>Upload a video of the job, add the manual if you have one. Muse Spark writes the steps, gates and checks.</Text>
         </View>
         <Text style={s.teachArrow}>+</Text>
       </Pressable>
@@ -66,7 +66,7 @@ export function MarketplaceScreen({ api, onOpen, onSettings, onCreate }: { api: 
               <View style={s.thumb}>
                 {thumbFor(api, item) ? <Image source={{ uri: thumbFor(api, item)! }} style={{ width: "100%", height: "100%" }} resizeMode="cover" /> : null}
                 <Chip color={colors.pass} style={{ position: "absolute", top: 10, left: 10 }}>
-                  {item.steps.filter((st) => st.safety_gate).length} safety gate · camera-checked
+                  {gateBadge(item.steps.filter((st) => st.safety_gate).length)}
                 </Chip>
                 {item.compiled ? (
                   <Chip color={colors.amber} style={{ position: "absolute", top: 10, right: 10, borderColor: colors.amber }}>
@@ -97,6 +97,11 @@ export function MarketplaceScreen({ api, onOpen, onSettings, onCreate }: { api: 
 function thumbFor(api: Api, skill: Skill): string | null {
   const withRef = skill.steps.find((st) => st.reference_image);
   return withRef ? api.mediaUrl(skill.id, withRef.reference_image) : null;
+}
+
+/** "1 safety gate · camera-checked", "3 safety gates · camera-checked", or just "camera-checked". */
+function gateBadge(n: number): string {
+  return n ? `${n} safety gate${n === 1 ? "" : "s"} · camera-checked` : "camera-checked";
 }
 
 const s = StyleSheet.create({

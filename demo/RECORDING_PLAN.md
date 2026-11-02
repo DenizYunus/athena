@@ -34,9 +34,9 @@ Close the scrcpy window or press Ctrl+C to stop. If the phone cannot forward aud
 ## Pre-flight, the evening before
 
 1. Backend: `backend/run.sh` in a terminal that stays open. Note the URL it prints. `ffmpeg` must be installed (`brew install ffmpeg`); the app's Settings → Test connection says if it is missing.
-2. Phone: uninstall the old build first so no test skills or stale settings remain, then install the newest APK from the Releases page. It must be 0.4.1 or later: 0.4.0 can drop a recording when you tap the mic while the guide is talking, and 0.3.0 cannot upload photos from a device. Until v0.4.1 is on the Releases page, install `mobile/dist/athena-0.4.1.apk` from the Mac with `adb install -r mobile/dist/athena-0.4.1.apk` (or build it as the README's "Build the APK locally" shows). Settings → backend URL → Test connection → Save. Same Wi-Fi as the Mac.
+2. Phone: uninstall the old build first so no test skills or stale settings remain, then install the newest APK from the Releases page. It must be 0.5.0 or later: earlier builds have no video upload (Teach a skill opens the photo flow), 0.4.0 can drop a recording when you tap the mic while the guide is talking, and 0.3.0 cannot upload photos from a device. Until v0.5.0 is on the Releases page, install `mobile/dist/athena-0.5.0.apk` from the Mac with `adb install -r mobile/dist/athena-0.5.0.apk` (or build it as the README's "Build the APK locally" shows). Settings → backend URL → Test connection → Save. Same Wi-Fi as the Mac.
 3. Walk through the whole sink skill once, off camera, with the real cabinet. This warms the prompt cache, grants the camera and microphone permissions so no permission dialogs appear on camera, and tells you how the verifier reacts to your cabinet.
-4. Delete any skills compiled during testing so the marketplace shows only the two seed skills plus the one you compile on camera:
+4. Delete any skills digested or compiled during testing so the marketplace shows only the two seed skills plus the one you digest on camera:
 
    ```bash
    backend/.venv/bin/python demo/reset_skills.py http://<mac-ip>:8000
@@ -52,7 +52,7 @@ Close the scrcpy window or press Ctrl+C to stop. If the phone cannot forward aud
 
 **Fridge skill (scenes D1–D2):** reach to the fridge's plug and outlet. You do not need to open the back panel; only step 1 is filmed. If the plug cannot be reached, drop the scene (see the storyboard's fallbacks).
 
-**Teach a skill (scenes A1–A2):** a three-to-five photo job that is not the sink. Pick whatever is at hand: descale the kettle, swap the vacuum cleaner filter, reset the router, change a bike tube, replace a shower head. Take the photos in order of the work. Dictate one sentence per photo, naming the parts the way a tradesperson would; that is what becomes the voice vocabulary. Type a title hint (the *Aa* button) such as "replace vacuum filter" so the compiled title is predictable. Run one compile off camera first; if the result is odd, re-shoot the photos closer and compile again.
+**Teach a skill (scenes A1–A2):** a video of a job that is not the sink, plus its manual as a PDF. Pick something with a manual you can download from the maker: swap the vacuum cleaner filter, replace a shower head, change a bike tube, descale the coffee machine. Film it on the phone in landscape or portrait, one to four minutes, under 4:30 so it is read in one call, talking as you work: name each part the way a tradesperson would and say what you are doing and why. Show each finished state for two seconds with your hands out of the way; those moments become the reference photos. If the manual has a safety step you skip on camera (unplug first, let it cool), leave it out of the video: the review screen then shows it as a gate from the manual, which is the point of adding the manual. Copy the video and the PDF to the phone (Downloads). Run one digest off camera first; it takes one to two minutes. If the steps come out odd, film the job again closer and with clearer narration.
 
 ## Clip list
 
@@ -62,8 +62,8 @@ Record in this order. Minimum takes: two per clip. Each row says what must be vi
 |---|---|---|---|---|
 | F1 | Cold open | Second camera: open the sink cabinet, water standing in the basin. | Hands, cabinet, standing water. | 6 s |
 | F2 | Cold open | Second camera: the fridge pulled a little from the wall, or just its plug and outlet. | Fridge and cord. | 5 s |
-| A1 | Teach a skill | scrcpy. Home → Teach a skill → three or four photos → hold the mic on the selected photo and speak one sentence → release. Repeat for each photo. | Thumbnails filling the strip; the live transcript appearing while you speak; the green badge when a note is attached. | 25 s |
-| A2 | Compile and review | Continue A1: tap Compile, wait (hint reads "Muse Spark is writing…"), then scroll the review screen slowly top to bottom, pause two seconds on the gate card and on a step with a thumbnail. Tap Keep. | Review screen with title, chips, steps, reference thumbnails. | 30 s |
+| A1 | Teach a skill | scrcpy. Home → Teach a skill → Choose the video → pick the job video → Add the manual (PDF) → pick the PDF → type a title → Digest the video. Keep recording through the upload bar and the progress lines until the review screen opens (cut the wait in the edit). | The video and the manual chosen; the upload bar; the progress line changing ("Muse Spark is watching the video…", "Picking a reference frame for each step."). | 25 s after cuts |
+| A2 | Review | Continue A1: scroll the review screen slowly top to bottom. Pause two seconds on the conflicts card, on a gate marked as coming from the manual, and on a step with its time chip and reference frame. Tap the play button on one step's frame and let the expert's clip play for three seconds. Close it. Tap Keep. | The "digested by Muse Spark" header with the video length and manual name; the conflicts card; source and time chips; a reference frame from your video; the clip playing. | 30 s |
 | B1 | Marketplace | scrcpy. Home with the new skill marked *yours*, scroll, open the sink skill, scroll the detail page, tap Install & start. | *yours* chip; gate card; Install & start. | 15 s |
 | C1 | Gate refused | Session on step 1 with no bucket. Let the guide finish speaking. Point at the empty cabinet, tap ✓. Wait for the verdict. Open Steps, show the sheet, close it. | Verdict bubble with the photo request or fix; Steps sheet without a Skip button. | 25 s |
 | C2 | Gate passed | Put the bucket under the trap. Tap ✓. Wait for the verdict and the overlay. Let the overlay stay its full seven seconds. | Teal *Verified* bubble; the overlay with the bucket outlined. | 20 s |
@@ -72,7 +72,7 @@ Record in this order. Minimum takes: two per clip. Each row says what must be vi
 | D1 | Fridge gate refused | Fridge skill, step 1, plug still in the outlet, tap ✓. | Plug in the outlet; the refusal bubble. | 12 s |
 | D2 | Fridge gate passed | Pull the plug, hold it so plug and outlet share the frame, tap ✓. | Plug and empty outlet together; *Verified*. | 12 s |
 | E1 | Under the hood | Mac screen: README models table (QuickTime screen recording or a screenshot). | The four model rows. | 5 s |
-| E2 | Under the hood | Terminal: `cd backend && .venv/bin/python -m pytest -q` → *74 passed*. | The green line. | 4 s |
+| E2 | Under the hood | Terminal: `cd backend && .venv/bin/python -m pytest -q` → *131 passed*. | The green line. | 4 s |
 | E3 | Under the hood | Terminal: `git log --format='%ad %s' --date=short` scrolled. | Dates from Oct 27, 2026 on. | 4 s |
 | E4 | Under the hood | Browser: github.com/DenizYunus/athena/releases. | The APK asset. | 4 s |
 | G2 | Close | scrcpy on the emulator (`athena_api36`) or the phone with Settings → Glasses → Mock Device Kit: open a session, tap the **Glasses** pill, wait for "Glasses ✓", tap ✓ once. | The pill turning to Glasses ✓, the preview switching to the glasses stream, a verdict. Not the `design/` glasses artboards: they show spoken commands and an automatic capture the app does not have. | 10 s |

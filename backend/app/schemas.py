@@ -13,6 +13,11 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+# Where a digested step came from. "added": a hazard-removal gate that neither the video nor the
+# document covers but the task clearly needs; the review screen labels it as added by Athena.
+StepSource = Literal["video", "document", "both", "added"]
+
+
 class Step(BaseModel):
     n: int = Field(ge=1)
     instruction: str
@@ -28,6 +33,31 @@ class Step(BaseModel):
     gate_requirement: str | None = None
     watch_me: bool = Field(default=False, description="Author flagged this step as worth continuous watching.")
     est_minutes: int = 2
+    # The fields below are set only for skills digested from a video; seed skills and photo-compiled
+    # skills load with the defaults.
+    source: StepSource | None = None
+    video_start_s: float | None = Field(default=None, description="Seconds into the expert's video where this step starts.")
+    video_end_s: float | None = None
+    clip: str | None = Field(
+        default=None,
+        description="Path (relative to the skills dir) of a short clip of the expert doing this step.",
+    )
+    document_note: str = Field(default="", description="Specs and cautions from the expert's document for this step.")
+
+
+class Conflict(BaseModel):
+    """A point where the expert's video and written procedure disagree, and what the skill uses."""
+
+    topic: str
+    video_says: str
+    document_says: str
+    resolution: str
+
+
+class DigestInfo(BaseModel):
+    video_seconds: float
+    chunks: int
+    documents: list[str] = Field(default_factory=list, description="File names as uploaded.")
 
 
 class Skill(BaseModel):
@@ -46,12 +76,34 @@ class Skill(BaseModel):
     )
     steps: list[Step]
     compiled: bool = Field(default=False, description="Produced by the compiler at runtime (deletable), not a seed.")
+    conflicts: list[Conflict] = Field(default_factory=list)
+    digest: DigestInfo | None = Field(default=None, description="Set when the skill was digested from a video.")
 
     def step(self, n: int) -> Step:
         for s in self.steps:
             if s.n == n:
                 return s
         raise KeyError(n)
+
+
+DigestStage = Literal["queued", "preparing", "uploading", "reading", "merging", "frames", "saving", "done", "failed"]
+
+
+class DigestJob(BaseModel):
+    """A video being digested into a skill. The app polls it until status is done or failed."""
+
+    id: str
+    status: Literal["running", "done", "failed"]
+    stage: DigestStage
+    message: str = Field(description="One sentence for the app's progress line.")
+    progress: float = Field(ge=0, le=1)
+    chunks_total: int = 0
+    chunks_done: int = 0
+    video_seconds: float = 0
+    documents: list[str] = Field(default_factory=list)
+    skill: Skill | None = None
+    error: str | None = Field(default=None, description="A sentence the app shows; never an upstream status code.")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class PhotoRequest(BaseModel):
