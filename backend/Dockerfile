@@ -2,9 +2,14 @@
 # ffmpeg 8 tone-maps an HDR phone video in its scale filter and Debian's ffmpeg is older, so the
 # binaries come from a static build of the version the backend was tested with.
 FROM mwader/static-ffmpeg:8.1.2 AS ffmpeg
+FROM node:22.23.4-trixie-slim AS node
 
 FROM python:3.13-slim
 COPY --from=ffmpeg /ffmpeg /ffprobe /usr/local/bin/
+# yt-dlp runs YouTube's player code in a JavaScript runtime when the author pastes a link, and it takes
+# Node 22 or later; Debian's own nodejs is 20.
+COPY --from=node /usr/local/bin/node /usr/local/bin/
+RUN apt-get update && apt-get install -y --no-install-recommends libstdc++6 && rm -rf /var/lib/apt/lists/*
 
 # Hugging Face runs the container as uid 1000, and authored skills are saved under skills/compiled.
 RUN useradd -m -u 1000 user

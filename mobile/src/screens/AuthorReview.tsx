@@ -6,7 +6,7 @@ import React, { useState } from "react";
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Api, Skill, Step } from "../api";
 import { ClipPlayer } from "../ClipPlayer";
-import { clock } from "../format";
+import { clock, videoCredit } from "../format";
 import { colors } from "../theme";
 import { Card, Chip, GhostButton, PrimaryButton } from "../ui";
 
@@ -45,6 +45,7 @@ export function AuthorReviewScreen({ api, skill, onTry, onDone, onDiscarded }: {
             {digest.documents.length ? ` + ${digest.documents.join(", ")}` : ""}
           </Text>
         ) : null}
+        {digest && videoCredit(digest) ? <Text style={s.meta}>{videoCredit(digest)}</Text> : null}
 
         <View style={s.chips}>
           {skill.tools.map((t) => (

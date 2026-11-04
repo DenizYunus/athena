@@ -58,6 +58,10 @@ class DigestInfo(BaseModel):
     video_seconds: float
     chunks: int
     documents: list[str] = Field(default_factory=list, description="File names as uploaded.")
+    # Set when the author pasted a YouTube link instead of uploading the video, so the skill credits it.
+    video_url: str | None = None
+    video_title: str | None = None
+    video_channel: str | None = None
 
 
 class Skill(BaseModel):
@@ -86,7 +90,7 @@ class Skill(BaseModel):
         raise KeyError(n)
 
 
-DigestStage = Literal["queued", "preparing", "uploading", "reading", "merging", "frames", "saving", "done", "failed"]
+DigestStage = Literal["queued", "downloading", "preparing", "uploading", "reading", "merging", "frames", "saving", "done", "failed"]
 
 
 class DigestJob(BaseModel):

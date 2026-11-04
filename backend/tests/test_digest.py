@@ -1,7 +1,8 @@
 """The video digester: POST /skills/digest, the pipeline, and what a digested skill feeds the guide.
 
 Videos are made with the real ffmpeg (a few seconds of test pattern), so normalizing, cutting,
-frames and clips all run for real; only the Meta API is the fake from conftest.
+frames and clips all run for real; the Meta API is the fake from conftest, and yt-dlp is a local
+script (FAKE_YTDLP) that answers like it.
 """
 
 from __future__ import annotations
@@ -16,9 +17,12 @@ import math
 import re
 import shutil
 import subprocess
+import os
+import sys
 import tempfile
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote
 
 import openai
@@ -1169,3 +1173,355 @@ def test_seed_skills_still_load_without_digest_fields(app_client):
     fridge = app_client.get("/skills/fridge-start-relay").json()
     assert fridge["digest"] is None and fridge["conflicts"] == []
     assert fridge["steps"][0]["source"] is None and fridge["steps"][0]["document_note"] == ""
+
+
+# ---------------------------------------------------------------- a YouTube link
+
+# Stands in for yt-dlp as a real subprocess, so timeouts and the kill on cancel run for real. What it
+# does for the details call (-J) and for the download comes from the JSON file in $FAKE_YTDLP.
+FAKE_YTDLP = r"""
+import json, os, shutil, subprocess, sys, time
+cfg = json.load(open(os.environ["FAKE_YTDLP"]))
+args = sys.argv[1:]
+step = cfg["info" if "-J" in args else "download"]
+# Like yt-dlp starting node or ffmpeg: a process of its own that a kill has to reach too.
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"]) if step.get("child") else None
+with open(cfg["log"], "a") as f:
+    f.write(json.dumps({"pid": os.getpid(), "child": child.pid if child else None, "args": args}) + "\n")
+time.sleep(step.get("sleep", 0))
+if step.get("stderr"):
+    sys.stderr.write(step["stderr"])
+    sys.exit(1)
+if "-J" in args:
+    print(step["raw"] if "raw" in step else json.dumps(step["details"]))
+    sys.exit(0)
+if step.get("skip"):  # what yt-dlp does with a file over --max-filesize
+    sys.exit(0)
+out = args[args.index("-o") + 1].replace("%(ext)s", "mp4")
+shutil.copyfile(step["video"], out)
+print(step.get("print", out))
+"""
+
+LINK = "https://youtu.be/jNQXAC9IVRw?si=shared-from-the-app"
+WATCH = "https://www.youtube.com/watch?v=jNQXAC9IVRw"
+
+
+def _gone(pid: int, within: float = 3.0) -> bool:
+    """True once no process has this id. A killed grandchild lingers until launchd or init reaps it."""
+    deadline = time.monotonic() + within
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.05)
+
+
+@pytest.fixture
+def ytdlp(tmp_path, monkeypatch, videos):
+    script = tmp_path / "fake_ytdlp.py"
+    script.write_text(FAKE_YTDLP)
+    config = tmp_path / "ytdlp.json"
+    log_path = tmp_path / "ytdlp.log"
+    cfg = {
+        "log": str(log_path),
+        "info": {"details": {"title": "Brake pads in five minutes", "channel": "Dana's Garage", "duration": 6, "live_status": "not_live"}},
+        "download": {"video": str(videos["land"])},
+    }
+
+    def save() -> None:
+        config.write_text(json.dumps(cfg))
+
+    def calls() -> list[dict]:
+        return [json.loads(line) for line in log_path.read_text().splitlines()] if log_path.exists() else []
+
+    save()
+    monkeypatch.setenv("FAKE_YTDLP", str(config))
+    monkeypatch.setattr(digest, "YTDLP", [sys.executable, str(script)])
+    return SimpleNamespace(cfg=cfg, save=save, calls=calls)
+
+
+def test_youtube_link_digest_end_to_end(app_client, fake_client, ytdlp, workdirs, tmp_path):
+    r = app_client.post(
+        "/skills/digest",
+        data={"video_url": LINK, "author": "Dana"},
+        files=[("documents", ("manual.pdf", PDF, "application/pdf"))],
+    )
+    assert r.status_code == 202, r.text
+    started = r.json()
+    assert started["status"] == "running" and started["documents"] == ["manual.pdf"]
+
+    job = _wait(app_client, started["id"])
+    assert job["status"] == "done", job
+    assert 5.5 < job["video_seconds"] < 6.5
+    skill = job["skill"]
+    assert skill["author"] == "Dana"
+    assert skill["digest"]["video_url"] == WATCH
+    assert skill["digest"]["video_title"] == "Brake pads in five minutes"
+    assert skill["digest"]["video_channel"] == "Dana's Garage"
+    assert skill["digest"]["documents"] == ["manual.pdf"]
+    # The video's title stands in for the author's own hint.
+    [call] = _digest_calls(fake_client, "DigestedSkill")
+    assert "Brake pads in five minutes" in _texts(call)[-1]
+    # The downloaded video went to Meta like an upload, and reference photos and clips were made from it.
+    assert fake_client.uploads[0]["mime"] == "video/mp4"
+    assert any(step["reference_image"] and step["clip"] for step in skill["steps"])
+
+    details, download = ytdlp.calls()
+    for args in (details["args"], download["args"]):
+        # yt-dlp only ever gets the canonical link, and only YouTube's own extractor, no playlists.
+        assert args[-1] == WATCH
+        assert args[:6] == ["--ignore-config", "--no-playlist", "--use-extractors", "youtube", "--js-runtimes", "node"]
+    assert "-J" in details["args"]
+    assert "-J" not in download["args"]
+    assert list(workdirs.iterdir()) == []
+
+
+def test_the_real_yt_dlp_reads_our_arguments_as_meant(app_client, fake_client, ytdlp, workdirs):
+    """The fake ignores the flags, so the installed yt-dlp parses the ones each call was given."""
+    yt_dlp = pytest.importorskip("yt_dlp")
+    job = _wait(app_client, app_client.post("/skills/digest", data={"video_url": LINK}).json()["id"])
+    assert job["status"] == "done", job
+    details, download = ytdlp.calls()
+    for args in (details["args"], download["args"]):
+        opts = yt_dlp.parse_options(args).ydl_opts
+        assert opts["noplaylist"] is True
+        assert opts["allowed_extractors"] == ["youtube"]
+        assert "node" in opts["js_runtimes"]
+    assert yt_dlp.parse_options(details["args"]).ydl_opts["dump_single_json"] is True
+    opts = yt_dlp.parse_options(download["args"]).ydl_opts
+    assert opts["format"] == "bv*+ba/b"
+    assert opts["format_sort"] == ["res:720", "fps:30", "vcodec:h264", "acodec:m4a"]
+    assert opts["merge_output_format"] == "mp4"
+    assert opts["max_filesize"] == settings.digest_max_upload_bytes
+    assert opts["outtmpl"]["default"].endswith("youtube.%(ext)s")
+    assert opts["forceprint"] == {"after_move": ["filepath"]}
+
+
+async def test_the_download_gets_at_least_five_minutes_even_for_a_short_video(ytdlp, tmp_path, monkeypatch):
+    """yt-dlp's start, the player's script in node and a slow link all take time a 6 s video does not say."""
+    timeouts = []
+    real_run = digest._run
+
+    async def recording(args, timeout, what, *rest, **kw):
+        timeouts.append((what, timeout))
+        return await real_run(args, timeout, what, *rest, **kw)
+
+    monkeypatch.setattr(digest, "_run", recording)
+    await digest.fetch_youtube(digest.YouTubeSource(url=WATCH), tmp_path)
+    assert timeouts == [("read the YouTube link", digest.YTDLP_INFO_TIMEOUT_S), ("download the video from YouTube", 300.0)]
+
+
+def test_the_authors_own_title_beats_the_videos(app_client, fake_client, ytdlp, workdirs):
+    r = app_client.post("/skills/digest", data={"video_url": LINK, "title_hint": "rear brake only"})
+    job = _wait(app_client, r.json()["id"])
+    assert job["status"] == "done", job
+    [call] = _digest_calls(fake_client, "DigestedSkill")
+    assert "rear brake only" in _texts(call)[-1] and "Brake pads in five minutes" not in _texts(call)[-1]
+
+
+def test_an_uploaded_video_has_no_link_on_the_skill(app_client, fake_client, videos, workdirs):
+    job = _wait(app_client, _post(app_client, videos["land"]).json()["id"])
+    assert job["status"] == "done", job
+    info = job["skill"]["digest"]
+    assert info["video_url"] is None and info["video_title"] is None and info["video_channel"] is None
+
+
+@pytest.mark.parametrize(
+    "case, words",
+    [
+        ("file and link", "not both"),
+        ("another site", "Paste a link to one YouTube video"),
+        ("a playlist", "Paste a link to one YouTube video"),
+        ("a channel", "Paste a link to one YouTube video"),
+        ("only spaces", "Choose a video to upload, or paste a YouTube link"),
+    ],
+)
+def test_link_checks(app_client, fake_client, videos, ytdlp, workdirs, case, words):
+    files = None
+    data = {"author": "t"}
+    if case == "file and link":
+        files = [("video", ("job.mp4", videos["land"].read_bytes(), "video/mp4"))]
+        data["video_url"] = LINK
+    elif case == "another site":
+        data["video_url"] = "https://vimeo.com/123456789"
+    elif case == "a playlist":
+        data["video_url"] = "https://www.youtube.com/playlist?list=PLx8xQhm5cP7uRJ8Hz"
+    elif case == "a channel":
+        data["video_url"] = "https://www.youtube.com/@DanasGarage"
+    elif case == "only spaces":
+        data["video_url"] = "   "
+    r = app_client.post("/skills/digest", data=data, files=files)
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert words in detail and detail.endswith(".")
+    assert ytdlp.calls() == [] and fake_client.uploads == [] and fake_client.calls == []
+    assert list(workdirs.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "case, sentence, ytdlp_runs",
+    [
+        ("private", "This YouTube video is private. Make it public or unlisted, or upload the file instead.", 1),
+        ("age", "This YouTube video is age-restricted, so the backend cannot download it. Upload the file instead.", 1),
+        ("bot check", "YouTube asked the backend to sign in before downloading. Try again later, or upload the file instead.", 1),
+        ("members", "This YouTube video is for channel members only. Upload the file instead.", 1),
+        ("unavailable", "YouTube says this video is unavailable. Check the link.", 1),
+        ("offline", "The backend could not reach YouTube. Check its internet connection and try again.", 1),
+        ("no yt-dlp", "The backend cannot download from YouTube because yt-dlp is not installed. Install the backend's requirements.", 1),
+        ("something new", "The backend could not download the video from YouTube. Check the link, or upload the file instead.", 1),
+        ("details not json", "The backend could not download the video from YouTube. Check the link, or upload the file instead.", 1),
+        ("details not an object", "The backend could not download the video from YouTube. Check the link, or upload the file instead.", 1),
+        ("rate limited", "YouTube is limiting downloads from this backend right now. Try again later, or upload the file instead.", 1),
+        ("rate limited, in YouTube's words", "YouTube is limiting downloads from this backend right now. Try again later, or upload the file instead.", 1),
+        ("a retried warning, then another error", "The backend could not download the video from YouTube. Check the link, or upload the file instead.", 1),
+        ("live", "This YouTube link is a live or upcoming stream. Use a finished video.", 1),
+        ("upcoming", "This YouTube link is a live or upcoming stream. Use a finished video.", 1),
+        ("too long", "The video is longer than 20 minutes, the most this backend downloads from YouTube. Choose a shorter one, or upload the file.", 1),
+        ("download refused", "The backend could not download the video from YouTube. Check the link, or upload the file instead.", 2),
+        ("too large", "YouTube's copy of this video is too large for the backend. Choose a shorter video.", 2),
+        ("not a video", "The file could not be read as a video. Choose an MP4, MOV or WebM file.", 2),
+        ("longer than the details said", "The video is longer than 0.05 minutes, the most this backend downloads from YouTube. Choose a shorter one, or upload the file.", 2),
+        ("a path outside the work folder", "YouTube's copy of this video is too large for the backend. Choose a shorter video.", 2),
+    ],
+)
+def test_a_link_that_cannot_be_used_fails_the_job_with_a_sentence(
+    app_client, fake_client, ytdlp, workdirs, tmp_path, monkeypatch, case, sentence, ytdlp_runs
+):
+    info, download = ytdlp.cfg["info"], ytdlp.cfg["download"]
+    stderr = {
+        "private": "ERROR: [youtube] jNQXAC9IVRw: Private video. Sign in if you've been granted access to this video",
+        "age": "ERROR: [youtube] jNQXAC9IVRw: Sign in to confirm your age. This video may be inappropriate for some users.",
+        "bot check": "ERROR: [youtube] jNQXAC9IVRw: Sign in to confirm you\u2019re not a bot. Use --cookies-from-browser",
+        "members": "ERROR: [youtube] jNQXAC9IVRw: Join this channel to get access to members-only content like this video",
+        "unavailable": "ERROR: [youtube] jNQXAC9IVRw: Video unavailable. This video has been removed by the uploader",
+        "offline": "ERROR: [youtube] jNQXAC9IVRw: Unable to download webpage: <urlopen error [Errno 8] nodename nor servname provided>",
+        "no yt-dlp": f"{sys.executable}: No module named yt_dlp",
+        "something new": "ERROR: [youtube] jNQXAC9IVRw: Something YouTube has never said before",
+        "rate limited": "ERROR: [youtube] jNQXAC9IVRw: Unable to download webpage: HTTP Error 429: Too Many Requests",
+        "rate limited, in YouTube's words": "ERROR: [youtube] jNQXAC9IVRw: This content isn't available, try again later.",
+        "a retried warning, then another error": (
+            "WARNING: [youtube] jNQXAC9IVRw: The read operation timed out. Retrying (1/3)...\n"
+            "ERROR: [youtube] jNQXAC9IVRw: Requested format is not available"
+        ),
+    }
+    if case in stderr:
+        info["stderr"] = stderr[case]
+    elif case == "details not json":
+        info["raw"] = "WARNING: something"
+    elif case == "details not an object":
+        info["details"] = ["not", "an", "object"]
+    elif case == "live":
+        info["details"]["live_status"] = "is_live"
+    elif case == "upcoming":
+        info["details"] = {"title": "t", "live_status": "is_upcoming", "duration": None}
+    elif case == "too long":
+        info["details"]["duration"] = 1800  # under the 60 minutes an upload may run, over a link's 20
+    elif case == "download refused":
+        download["stderr"] = "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+    elif case == "too large":
+        download["skip"] = True
+    elif case == "not a video":
+        junk = tmp_path / "junk.mp4"
+        junk.write_bytes(b"\x00" * 4096)
+        download["video"] = str(junk)
+    elif case == "longer than the details said":
+        info["details"]["duration"] = None
+        monkeypatch.setattr(settings, "digest_max_video_s", 3.0)
+    elif case == "a path outside the work folder":
+        download["print"] = str(download["video"])
+    ytdlp.save()
+
+    r = app_client.post("/skills/digest", data={"video_url": LINK})
+    assert r.status_code == 202, r.text
+    job = _wait(app_client, r.json()["id"])
+    assert job["status"] == "failed", job
+    assert job["error"] == sentence
+    assert len(ytdlp.calls()) == ytdlp_runs
+    assert fake_client.uploads == [] and fake_client.calls == []
+    assert list(workdirs.iterdir()) == []
+
+
+async def test_a_slow_youtube_answer_is_the_backends_sentence(ytdlp, tmp_path, monkeypatch):
+    ytdlp.cfg["info"].update(sleep=30, child=True)
+    ytdlp.save()
+    monkeypatch.setattr(digest, "YTDLP_INFO_TIMEOUT_S", 0.5)
+    started = time.monotonic()
+    with pytest.raises(digest.BackendTimeout) as caught:
+        await digest.fetch_youtube(digest.YouTubeSource(url=WATCH), tmp_path)
+    assert time.monotonic() - started < 10  # killed, not waited out
+    assert str(caught.value) == "The backend took too long to read the YouTube link. Try again, or use a shorter video."
+    [run] = ytdlp.calls()
+    assert _gone(run["pid"]) and _gone(run["child"])
+
+
+async def test_cancelling_the_job_while_it_downloads_stops_yt_dlp_and_what_it_started(fake_client, ytdlp, tmp_path):
+    ytdlp.cfg["download"].update(sleep=30, child=True)
+    ytdlp.save()
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    inp = digest.DigestInput(workdir=workdir, video=None, source=digest.YouTubeSource(url=WATCH))
+    job = _new_job()
+    task = asyncio.create_task(digest.run_job(job, fake_client, inp, lambda skill, media: skill, str))
+    deadline = time.monotonic() + 10
+    while len(ytdlp.calls()) < 2 and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    assert job.stage == "downloading" and job.message == "Downloading the video from YouTube."
+    started = time.monotonic()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # Killing only yt-dlp would leave its child holding the output pipes, and the wait for it would
+    # last as long as the child does.
+    assert time.monotonic() - started < 5
+    assert job.status == "failed"
+    assert not workdir.exists()
+    run = ytdlp.calls()[-1]
+    assert _gone(run["pid"]) and _gone(run["child"])
+
+
+
+async def test_a_child_already_gone_does_not_turn_the_kill_into_a_crash(monkeypatch):
+    """macOS refuses killpg with EPERM for a child that exited but was not reaped yet."""
+
+    def refused(pid, sig):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(digest.os, "killpg", refused)
+    with pytest.raises(digest.BackendTimeout):
+        await digest._run([sys.executable, "-c", "import time; time.sleep(30)"], timeout=0.3, what="x", group=True)
+
+
+async def test_only_yt_dlp_runs_in_a_process_group_of_its_own():
+    """ffmpeg and ffprobe stay in the backend's group and go down with it; yt-dlp gets its own, so a kill
+    reaches node and ffmpeg it starts."""
+    script = [sys.executable, "-c", "import os; print(os.getpgid(0))"]
+    assert int(await digest._run(script, 30, "x")) == os.getpgid(0)
+    assert int(await digest._run(script, 30, "x", group=True)) != os.getpgid(0)
+
+
+def test_a_digest_is_refused_while_the_backend_runs_as_many_as_it_allows(app_client, fake_client, ytdlp, videos, workdirs, monkeypatch):
+    monkeypatch.setattr(settings, "digest_max_running", 1)
+    ytdlp.cfg["download"]["sleep"] = 2
+    ytdlp.save()
+    first = app_client.post("/skills/digest", data={"video_url": LINK})
+    assert first.status_code == 202, first.text
+    for refused in (
+        app_client.post("/skills/digest", data={"video_url": LINK}),
+        _post(app_client, videos["land"]),
+    ):
+        assert refused.status_code == 429, refused.text
+        assert refused.json()["detail"] == "The backend is already digesting as many videos as it can. Try again in a few minutes."
+    assert _wait(app_client, first.json()["id"])["status"] == "done"
+    assert _post(app_client, videos["land"]).status_code == 202
+    assert len(ytdlp.calls()) == 2  # the refused link never reached yt-dlp
+
+
+def test_a_digest_is_refused_when_the_disk_is_nearly_full(app_client, fake_client, ytdlp, videos, workdirs, monkeypatch):
+    monkeypatch.setattr(settings, "digest_min_free_bytes", 1 << 60)
+    for r in (app_client.post("/skills/digest", data={"video_url": LINK}), _post(app_client, videos["land"])):
+        assert r.status_code == 507, r.text
+        assert r.json()["detail"] == "The backend's disk is nearly full. Free some space where it runs, then try again."
+    assert ytdlp.calls() == [] and list(workdirs.iterdir()) == []

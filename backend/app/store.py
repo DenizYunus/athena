@@ -145,6 +145,9 @@ class DigestJobStore:
     def get(self, job_id: str) -> DigestJob | None:
         return self._jobs.get(job_id)
 
+    def running(self) -> int:
+        return sum(1 for job in self._jobs.values() if job.status == "running")
+
     def _prune(self) -> None:
         excess = len(self._jobs) - self.limit
         if excess <= 0:

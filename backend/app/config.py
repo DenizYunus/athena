@@ -58,6 +58,12 @@ class Settings:
     # One request takes at most 10 minutes of audio.
     digest_narration: bool = True
     digest_narration_piece_s: float = 540.0
+    # A link costs its sender nothing but makes the backend download and digest the whole video, so a
+    # backend shared on a public URL holds links to a shorter length, runs few digests at once, and
+    # refuses new ones when its disk is nearly full.
+    digest_max_link_s: float = 1200.0
+    digest_max_running: int = 2
+    digest_min_free_bytes: int = 2 * 1024 * 1024 * 1024
 
 
 def load_settings() -> Settings:
@@ -88,6 +94,9 @@ def load_settings() -> Settings:
         digest_file_ttl_s=int(os.environ.get("DIGEST_FILE_TTL_S", "86400")),
         digest_narration=os.environ.get("DIGEST_NARRATION", "1").strip().lower() not in ("0", "false", "no", "off"),
         digest_narration_piece_s=float(os.environ.get("DIGEST_NARRATION_PIECE_S", "540")),
+        digest_max_link_s=float(os.environ.get("DIGEST_MAX_LINK_S", "1200")),
+        digest_max_running=int(os.environ.get("DIGEST_MAX_RUNNING", "2")),
+        digest_min_free_bytes=int(os.environ.get("DIGEST_MIN_FREE_BYTES", str(2 * 1024 * 1024 * 1024))),
     )
 
 

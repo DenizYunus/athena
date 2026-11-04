@@ -10,3 +10,5 @@ pytest>=8.2
 pytest-asyncio>=0.23
 meta-sam-parser
 websockets
+# Downloads a pasted YouTube link; the default extras include the scripts for YouTube's player.
+yt-dlp[default]>=2026.10

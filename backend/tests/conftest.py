@@ -318,6 +318,9 @@ def app_client(fake_client, monkeypatch, tmp_path):
     monkeypatch.setattr(main.skills, "_skills", {k: v for k, v in main.skills._skills.items() if not v.compiled})
     main.app.dependency_overrides[main.meta_client] = lambda: fake_client
     main.sessions._sessions.clear()
+    # Each test starts with no digest running, and the backend's free-disk check off.
+    monkeypatch.setattr(main.digest_jobs, "_jobs", {})
+    monkeypatch.setattr(main.settings, "digest_min_free_bytes", 0)
     with TestClient(main.app) as c:
         yield c
     main.app.dependency_overrides.clear()

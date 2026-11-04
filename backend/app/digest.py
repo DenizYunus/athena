@@ -5,6 +5,8 @@ photo per step taken from the frame that best shows it done, a short clip of the
 step, the document's specs per step, and the points where video and document disagree.
 
 Stages, as the app's progress line shows them:
+  downloading  only for a YouTube link: yt-dlp fetches the video at up to 720p, then it is checked
+             like an upload.
   preparing  the upload becomes a small H.264 MP4, cut into parts of at most DIGEST_CHUNK_S seconds.
              Muse Spark samples a fixed frame budget (about 1 fps up to roughly 5 minutes); a longer
              video is subsampled and its timestamps come back compressed, so no call sees more.
@@ -20,23 +22,29 @@ Stages, as the app's progress line shows them:
              becomes the reference photo; a clip of the step is cut from the video.
   saving     published like a compiled skill.
 
-ffmpeg and ffprobe run as asyncio subprocesses. The Meta client is a parameter so tests pass a fake.
+ffmpeg, ffprobe and yt-dlp run as asyncio subprocesses. The Meta client is a parameter so tests pass a fake.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import io
 import json
 import logging
 import math
+import os
+import re
 import secrets
 import shutil
+import signal
+import sys
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
+from urllib.parse import parse_qs, urlsplit
 
 from PIL import Image, ImageFilter, ImageStat
 
@@ -87,6 +95,36 @@ NARRATION_OVERLAP_S = 20.0
 NARRATION_MAX_REQUEST_S = 600.0
 # A sentence that began in an earlier part is told to a later part only when this much of it is inside.
 NARRATION_MIN_SHARED_S = 0.5
+
+# yt-dlp runs from the backend's own Python, so it is the version requirements.txt installs. YouTube's
+# player needs a JavaScript runtime before it hands out the video formats, and yt-dlp enables only deno
+# by itself; node is the one installed here.
+YTDLP = [sys.executable, "-m", "yt_dlp"]
+YTDLP_OPTIONS = ["--ignore-config", "--no-playlist", "--use-extractors", "youtube", "--js-runtimes", "node"]
+# Reading a link's details is a page fetch or two.
+YTDLP_INFO_TIMEOUT_S = 60.0
+# The digester never uses more than 1280 px (NORMALIZE_SCALE), so 720p is all it downloads. H.264 and
+# AAC come first: the two streams then merge into an MP4 without re-encoding.
+YTDLP_FORMAT = ["-f", "bv*+ba/b", "-S", "res:720,fps:30,vcodec:h264,acodec:m4a", "--merge-output-format", "mp4"]
+YOUTUBE_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+YOUTUBE_HOSTS = ("youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtube-nocookie.com", "www.youtube-nocookie.com")
+YOUTUBE_SHORT_HOSTS = ("youtu.be", "www.youtu.be")
+# Paths with the id as their second part: /shorts/<id>, /live/<id>, /embed/<id>, /v/<id>.
+YOUTUBE_ID_PATHS = ("shorts", "live", "embed", "v")
+# What yt-dlp says when a download fails -> the sentence the author sees. The first match wins, so the
+# age check ("Sign in to confirm your age") comes before the bot check ("Sign in to confirm you're not a bot").
+YTDLP_FAILURES = (
+    (("private video",), "This YouTube video is private. Make it public or unlisted, or upload the file instead."),
+    (("confirm your age", "age-restricted", "inappropriate for some users"), "This YouTube video is age-restricted, so the backend cannot download it. Upload the file instead."),
+    (("not a bot", "sign in to confirm"), "YouTube asked the backend to sign in before downloading. Try again later, or upload the file instead."),
+    (("members-only", "join this channel"), "This YouTube video is for channel members only. Upload the file instead."),
+    (("live event", "premieres in", "this live stream"), "This YouTube link is a live or upcoming stream. Use a finished video."),
+    (("http error 429", "too many requests", "rate-limited", "try again later"), "YouTube is limiting downloads from this backend right now. Try again later, or upload the file instead."),
+    (("video unavailable", "this video is not available", "this video has been removed", "removed by the uploader", "has been terminated"), "YouTube says this video is unavailable. Check the link."),
+    (("failed to resolve", "nodename nor servname", "name or service not known", "timed out", "connection refused", "connection reset", "network is unreachable"), "The backend could not reach YouTube. Check its internet connection and try again."),
+)
+# Words of 11 id characters YouTube uses in embed links for things that are not one video.
+NOT_VIDEO_IDS = ("videoseries", "live_stream")
 
 
 # ---------------------------------------------------------------- prompts and schemas
@@ -215,13 +253,21 @@ class Document:
 
 
 @dataclass
+class YouTubeSource:
+    url: str  # the canonical watch link youtube_link() built
+    title: str = ""  # filled in when the video's details are read
+    channel: str = ""
+
+
+@dataclass
 class DigestInput:
     workdir: Path  # owned by the pipeline from here on, removed when it ends
-    video: Path
+    video: Path | None  # None until the video behind `source` is downloaded
     documents: list[Document] = field(default_factory=list)
     author: str = "Anonymous"
     title_hint: str = ""
     hdr: bool = False  # the upload is HLG or PQ; normalize tone-maps it
+    source: YouTubeSource | None = None  # set when the author pasted a link instead of uploading
 
 
 @dataclass
@@ -248,26 +294,50 @@ def _clock(seconds: float) -> str:
 # ---------------------------------------------------------------- ffmpeg
 
 
-async def _run(args: list[str], timeout: float, what: str) -> bytes:
-    """Run ffmpeg or ffprobe; stdout on success. ffmpeg's own error text goes to the log only."""
+async def _run(
+    args: list[str],
+    timeout: float,
+    what: str,
+    failure: Callable[[str], Exception] | None = None,
+    group: bool = False,
+) -> bytes:
+    """Run ffmpeg, ffprobe or yt-dlp; stdout on success. The tool's own error text goes to the log only;
+    `failure` turns it into the exception to raise instead of the generic one.
+
+    `group` starts the tool in a process group of its own, so a kill also reaches the processes it
+    starts (yt-dlp runs node and ffmpeg); without it, the tool stays in the backend's group and goes
+    down with it."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            *args, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            *args,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=group,
         )
     except FileNotFoundError as exc:
         raise RuntimeError(f"The backend cannot {what} because {Path(args[0]).name} is not installed. Install ffmpeg where the backend runs.") from exc
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout)
     except BaseException as exc:
-        # A timeout or a cancelled job must not leave ffmpeg running.
+        # A timeout or a cancelled job must not leave ffmpeg or yt-dlp running.
         if proc.returncode is None:
-            proc.kill()
+            # The child may have exited without being reaped yet: macOS then refuses killpg with
+            # EPERM, and the kill itself finds no process.
+            if group:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
             await proc.wait()
         if isinstance(exc, TimeoutError):
             raise BackendTimeout(f"The backend took too long to {what}. Try again, or use a shorter video.") from exc
         raise
     if proc.returncode != 0:
-        log.warning("%s failed (%s): %s", Path(args[0]).name, proc.returncode, err.decode(errors="replace")[-600:])
+        text = err.decode(errors="replace")
+        log.warning("%s failed (%s): %s", Path(args[0]).name, proc.returncode, text[-600:])
+        if failure is not None:
+            raise failure(text)
         raise RuntimeError(f"The backend could not {what}. Try another video file.")
     return out
 
@@ -353,6 +423,123 @@ async def probe_upload(path: Path) -> tuple[Path, VideoInfo]:
     # The upload can be up to 1 GiB; the remux replaces it.
     path.unlink(missing_ok=True)
     return remuxed, info
+
+
+# ---------------------------------------------------------------- a YouTube link
+
+
+def youtube_link(text: str) -> str | None:
+    """The canonical watch link for a link to one YouTube video, or None for anything else.
+
+    Only the 11-character video id is taken from what the author pasted, and yt-dlp gets a link built
+    from it, so a pasted link can point the downloader neither at another site nor at a playlist."""
+    text = text.strip()
+    if not text or any(c.isspace() for c in text):
+        return None
+    if "://" not in text:
+        text = "https://" + text
+    try:
+        parts = urlsplit(text)
+        host = (parts.hostname or "").lower()
+    except ValueError:  # a malformed port or bracketed host
+        return None
+    if parts.scheme.lower() not in ("http", "https"):
+        return None
+    path = [p for p in parts.path.split("/") if p]
+    if host in YOUTUBE_SHORT_HOSTS:
+        candidate = path[0] if len(path) == 1 else ""
+    elif host in YOUTUBE_HOSTS:
+        if path == ["watch"]:
+            candidate = (parse_qs(parts.query).get("v") or [""])[0]
+        elif len(path) == 2 and path[0] in YOUTUBE_ID_PATHS:
+            candidate = path[1]
+        else:
+            candidate = ""
+    else:
+        return None
+    if not YOUTUBE_ID.fullmatch(candidate) or candidate in NOT_VIDEO_IDS:
+        return None
+    return f"https://www.youtube.com/watch?v={candidate}"
+
+
+def _download_failure(stderr: str) -> Exception:
+    """The sentence for a failed yt-dlp run. Its last ERROR line decides: earlier WARNING lines (a retried
+    timeout, say) are often about something that went right in the end."""
+    errors = [line for line in stderr.splitlines() if line.startswith("ERROR:")]
+    text = (errors[-1] if errors else stderr).lower()
+    if "no module named yt_dlp" in text:
+        return RuntimeError("The backend cannot download from YouTube because yt-dlp is not installed. Install the backend's requirements.")
+    for needles, sentence in YTDLP_FAILURES:
+        if any(n in text for n in needles):
+            return VideoError(sentence)
+    return VideoError("The backend could not download the video from YouTube. Check the link, or upload the file instead.")
+
+
+def _link_limit_s() -> float:
+    return min(settings.digest_max_video_s, settings.digest_max_link_s)
+
+
+def _too_long() -> VideoError:
+    return VideoError(
+        f"The video is longer than {_link_limit_s() / 60:g} minutes, the most this backend downloads from YouTube. "
+        "Choose a shorter one, or upload the file."
+    )
+
+
+async def fetch_youtube(source: YouTubeSource, workdir: Path) -> Path:
+    """Download the video behind a YouTube link into workdir, as an MP4 of at most 720p.
+
+    Its details are read first, so a live stream or a video over the length limit is refused before
+    anything is downloaded; the title and channel go on the skill."""
+    out = await _run([*YTDLP, *YTDLP_OPTIONS, "-J", source.url], YTDLP_INFO_TIMEOUT_S, "read the YouTube link", _download_failure, group=True)
+    try:
+        details = json.loads(out)
+    except json.JSONDecodeError:
+        details = None
+    if not isinstance(details, dict):
+        raise VideoError("The backend could not download the video from YouTube. Check the link, or upload the file instead.")
+    if details.get("is_live") or details.get("live_status") in ("is_live", "is_upcoming"):
+        raise VideoError("This YouTube link is a live or upcoming stream. Use a finished video.")
+    duration = _seconds(details.get("duration"))
+    if duration is not None and duration > _link_limit_s():
+        raise _too_long()
+    source.title = str(details.get("title") or "").strip()[:200]
+    source.channel = str(details.get("channel") or details.get("uploader") or "").strip()[:120]
+
+    ffmpeg = shutil.which(settings.ffmpeg_bin)
+    out = await _run(
+        [
+            *YTDLP, *YTDLP_OPTIONS, *YTDLP_FORMAT,
+            "--max-filesize", str(settings.digest_max_upload_bytes),
+            *(["--ffmpeg-location", ffmpeg] if ffmpeg else []),
+            "--no-progress", "--print", "after_move:filepath",
+            "-o", str(workdir / "youtube.%(ext)s"),
+            source.url,
+        ],
+        timeout=max(300.0, (duration or _link_limit_s()) * 2),
+        what="download the video from YouTube",
+        failure=_download_failure,
+        group=True,
+    )
+    lines = out.decode(errors="replace").strip().splitlines()
+    path = Path(lines[-1].strip()) if lines else None
+    # yt-dlp skips a file over --max-filesize and still exits 0, printing no path.
+    if path is None or not path.is_file() or path.resolve().parent != workdir.resolve():
+        raise VideoError("YouTube's copy of this video is too large for the backend. Choose a shorter video.")
+    return path
+
+
+async def _download(inp: DigestInput, job: DigestJob) -> None:
+    """The video behind the author's link, checked like an upload, becomes inp.video."""
+    assert inp.source is not None
+    _stage(job, "downloading", 0.01, "Downloading the video from YouTube.")
+    path, info = await probe_upload(await fetch_youtube(inp.source, inp.workdir))
+    if info.duration > _link_limit_s():
+        raise _too_long()
+    inp.video, inp.hdr = path, info.hdr
+    job.video_seconds = round(info.duration, 2)
+    if not inp.title_hint.strip():
+        inp.title_hint = inp.source.title
 
 
 def _encode_args(vf: str | None, crf: int) -> list[str]:
@@ -880,6 +1067,9 @@ async def _step_media(
 
 async def digest(client: Any, inp: DigestInput, job: DigestJob) -> tuple[Skill, dict[str, bytes | Path]]:
     """The skill and its media (keyed by path relative to the skills dir). Updates the job as it goes."""
+    if inp.video is None:
+        await _download(inp, job)
+    assert inp.video is not None
     _stage(job, "preparing", 0.05, "Preparing the video.")
     normalized = inp.workdir / "video.mp4"
     await normalize(inp.video, normalized, job.video_seconds or settings.digest_max_video_s, hdr=inp.hdr)
@@ -1043,7 +1233,14 @@ async def digest(client: Any, inp: DigestInput, job: DigestJob) -> tuple[Skill, 
             steps=steps,
             compiled=True,
             conflicts=[Conflict(**c) for c in data["conflicts"] if str(c.get("topic", "")).strip()],
-            digest=DigestInfo(video_seconds=round(duration, 2), chunks=n, documents=[d.name for d in docs]),
+            digest=DigestInfo(
+                video_seconds=round(duration, 2),
+                chunks=n,
+                documents=[d.name for d in docs],
+                video_url=inp.source.url if inp.source else None,
+                video_title=(inp.source.title or None) if inp.source else None,
+                video_channel=(inp.source.channel or None) if inp.source else None,
+            ),
         )
     except (KeyError, TypeError, AttributeError, ValueError) as exc:
         # pydantic's ValidationError is a ValueError too; either way the app gets one sentence.

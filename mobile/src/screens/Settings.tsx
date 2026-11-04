@@ -36,8 +36,8 @@ export function SettingsScreen({ settings, onSaved, onBack }: { settings: Settin
     <ScrollView style={s.root} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
       <Text style={s.h1}>Settings</Text>
       <Text style={s.help}>
-        The backend runs on your Mac. Start it with{" "}
-        <Text style={s.code}>uvicorn app.main:app --host 0.0.0.0 --port 8000</Text> and enter the Mac's Wi-Fi address below.
+        The backend runs on a Mac. On the same Wi-Fi, enter the address <Text style={s.code}>backend/run.sh</Text> prints; from
+        anywhere, the https address <Text style={s.code}>backend/share.sh</Text> prints.
       </Text>
 
       <Text style={s.label}>Backend URL</Text>

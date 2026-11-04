@@ -340,33 +340,69 @@ async def _save_video(video: UploadFile, workdir: Path) -> tuple[Path, digest.Vi
     return path, info
 
 
+def _room_for_a_digest() -> None:
+    """Refuse a new digest while the backend runs as many as it allows, or its disk is nearly full.
+    Neither status is 503, which app builds up to 0.4.0 read as "no API key"."""
+    if digest_jobs.running() >= settings.digest_max_running:
+        raise HTTPException(429, "The backend is already digesting as many videos as it can. Try again in a few minutes.")
+    if shutil.disk_usage(tempfile.gettempdir()).free < settings.digest_min_free_bytes:
+        raise HTTPException(507, "The backend's disk is nearly full. Free some space where it runs, then try again.")
+
+
 @app.post("/skills/digest", response_model=DigestJob, status_code=202)
 async def digest_endpoint(
     video: UploadFile | None = File(default=None),
+    video_url: str = Form(""),
     documents: list[UploadFile] = File(default=[]),
     author: str = Form("Anonymous"),
     title_hint: str = Form(""),
     client: Any = Depends(meta_client),
 ) -> DigestJob:
-    """A video of the job (and up to three PDFs of the written procedure) -> a digest job.
+    """A video of the job, uploaded or as a YouTube link (and up to three PDFs of the written
+    procedure) -> a digest job.
 
-    The upload is checked here, so a wrong file fails at once with a sentence; the digest itself
-    runs in the background for minutes, and the app polls GET /skills/digest/{job_id}."""
-    if video is None or (not video.filename and not video.size):
-        raise HTTPException(422, "Choose a video to upload.")
-    if not _is_video(video):
+    An upload is checked here, so a wrong file fails at once with a sentence. A link is only checked
+    for its shape: the video behind it is downloaded and checked by the job, whose failure the app
+    shows the same way. The digest itself runs in the background for minutes, and the app polls
+    GET /skills/digest/{job_id}."""
+    _room_for_a_digest()
+    has_file = video is not None and bool(video.filename or video.size)
+    link = video_url.strip()
+    source: digest.YouTubeSource | None = None
+    if has_file and link:
+        raise HTTPException(422, "Choose a video file or paste a YouTube link, not both.")
+    if link:
+        url = digest.youtube_link(link)
+        if url is None:
+            raise HTTPException(422, "Paste a link to one YouTube video (youtube.com or youtu.be).")
+        source = digest.YouTubeSource(url=url)
+    elif not has_file:
+        raise HTTPException(422, "Choose a video to upload, or paste a YouTube link.")
+    elif not _is_video(video):
         raise HTTPException(422, "The file is not a video. Choose an MP4, MOV or WebM file.")
     workdir = Path(tempfile.mkdtemp(prefix="athena-digest-"))
     try:
         docs = await _save_documents(documents, workdir)
-        path, info = await _save_video(video, workdir)
+        path, info = (None, None) if source else await _save_video(video, workdir)
     except BaseException:
         shutil.rmtree(workdir, ignore_errors=True)
         raise
 
-    job = digest_jobs.create(video_seconds=round(info.duration, 2), documents=[d.name for d in docs])
+    try:
+        # Again: another digest may have started while this request saved its files.
+        _room_for_a_digest()
+    except HTTPException:
+        shutil.rmtree(workdir, ignore_errors=True)
+        raise
+    job = digest_jobs.create(video_seconds=round(info.duration, 2) if info else 0, documents=[d.name for d in docs])
     inp = digest.DigestInput(
-        workdir=workdir, video=path, documents=docs, author=author, title_hint=title_hint, hdr=info.hdr
+        workdir=workdir,
+        video=path,
+        documents=docs,
+        author=author,
+        title_hint=title_hint,
+        hdr=info.hdr if info else False,
+        source=source,
     )
 
     def publish(skill: Skill, media: dict) -> Skill:

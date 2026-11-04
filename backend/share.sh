@@ -17,8 +17,13 @@ fi
 LOG="$(mktemp -t athena-tunnel)"
 trap 'kill $(jobs -p) 2>/dev/null; wait 2>/dev/null; rm -f "$LOG"' EXIT
 # Cloudflare drops a response that has not started within 100 s, so checks and compiles give up first.
-CHECK_DEADLINE_S="${CHECK_DEADLINE_S:-90}" COMPILE_TIMEOUT_S="${COMPILE_TIMEOUT_S:-90}" \
-  .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+# The backend ignores the hangup a closed tab sends: the trap above then stops it with TERM, which
+# shuts it down cleanly and stops the ffmpeg and yt-dlp runs of any digest in progress.
+(
+  trap '' HUP
+  CHECK_DEADLINE_S="${CHECK_DEADLINE_S:-90}" COMPILE_TIMEOUT_S="${COMPILE_TIMEOUT_S:-90}" \
+    exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+) &
 BACKEND=$!
 cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8000 2>"$LOG" &
 TUNNEL=$!
@@ -37,7 +42,7 @@ if [ -z "$URL" ]; then
 fi
 echo
 echo "Backend URL for the app's Settings:  $URL"
-echo "Videos for a new skill must stay under 100 MB through the tunnel."
+echo "Upload only short videos through the tunnel (42 MB went through, 95 MB did not), or paste a YouTube link instead."
 echo
 while kill -0 "$BACKEND" 2>/dev/null && kill -0 "$TUNNEL" 2>/dev/null; do sleep 2; done
 echo "The backend or the tunnel stopped."

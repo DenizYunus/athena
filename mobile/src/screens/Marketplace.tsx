@@ -39,7 +39,7 @@ export function MarketplaceScreen({ api, onOpen, onSettings, onCreate }: { api: 
       <Pressable onPress={onCreate} style={({ pressed }) => [s.teach, pressed && { opacity: 0.85 }]} accessibilityRole="button">
         <View style={{ flex: 1 }}>
           <Text style={s.teachTitle}>Teach a skill</Text>
-          <Text style={s.teachText}>Upload a video of the job, add the manual if you have one. Muse Spark writes the steps, gates and checks.</Text>
+          <Text style={s.teachText}>Upload a video of the job or paste a YouTube link, add the manual if you have one. Muse Spark writes the steps, gates and checks.</Text>
         </View>
         <Text style={s.teachArrow}>+</Text>
       </Pressable>

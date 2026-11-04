@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Image, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Api, Skill } from "../api";
-import { clock } from "../format";
+import { clock, videoCredit } from "../format";
 import { colors } from "../theme";
 import { Card, Chip, GhostButton, PrimaryButton } from "../ui";
 
@@ -35,6 +35,7 @@ export function SkillDetailScreen({ api, skill, onStart, onBack }: { api: Api; s
             Learned from a {clock(skill.digest.video_seconds)} video{skill.digest.documents.length ? " and the manual" : ""}
           </Text>
         ) : null}
+        {skill.digest && videoCredit(skill.digest) ? <Text style={s.meta}>{videoCredit(skill.digest)}</Text> : null}
 
         <View style={s.stats}>
           <Stat big={String(skill.steps.length)} small="steps" />

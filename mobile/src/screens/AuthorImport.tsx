@@ -1,5 +1,6 @@
-// Author flow, step 1: upload a video of the job, plus the written procedure (PDF) when there is
-// one. The backend (POST /skills/digest) checks the files and answers at once with a job; Muse Spark
+// Author flow, step 1: upload a video of the job, or paste a YouTube link to it, plus the written
+// procedure (PDF) when there is one. The backend (POST /skills/digest) checks the files and answers at
+// once with a job (for a link it downloads the video first, inside the job); Muse Spark
 // then watches the video and reads the document there while this screen polls the job
 // (GET /skills/digest/{id}) and lands on the review screen once the skill is published.
 // Photographing the steps (AuthorCapture) stays as the second way in.
@@ -10,6 +11,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Api, ApiError, DigestJob, PickedFile, Skill } from "../api";
 import { megabytes } from "../format";
+import { youtubeVideoId } from "../links";
 import { colors, radius } from "../theme";
 import { Card, GhostButton, PrimaryButton } from "../ui";
 
@@ -28,6 +30,7 @@ type Phase = "idle" | "picking" | "uploading" | "digesting" | "lost" | "failed";
 
 export function AuthorImportScreen({ api, onCompiled, onBack, onPhotos }: { api: Api; onCompiled: (skill: Skill) => void; onBack: () => void; onPhotos: () => void }) {
   const [video, setVideo] = useState<PickedFile | null>(null);
+  const [link, setLink] = useState("");
   const [docs, setDocs] = useState<PickedFile[]>([]);
   const [title, setTitle] = useState("");
   const [author, setAuthor] = useState("");
@@ -62,6 +65,9 @@ export function AuthorImportScreen({ api, onCompiled, onBack, onPhotos }: { api:
   }, []);
 
   const working = phase === "picking" || phase === "uploading" || phase === "digesting";
+  // A picked file wins over a link; the link field shows only while no file is picked.
+  const linkOk = !video && youtubeVideoId(link) !== null;
+  const ready = !!video || linkOk;
 
   async function pickVideo() {
     if (working) return;
@@ -149,6 +155,16 @@ export function AuthorImportScreen({ api, onCompiled, onBack, onPhotos }: { api:
     }
   }
 
+  /** Back to the link field. Like picking another video, it leaves a lost or failed digest behind. */
+  function removeVideo() {
+    if (working || !video) return;
+    discard(video);
+    setVideo(null);
+    setJob(null);
+    setError("");
+    setPhase("idle");
+  }
+
   function removeDocument(doc: PickedFile) {
     if (working) return;
     discard(doc);
@@ -157,7 +173,7 @@ export function AuthorImportScreen({ api, onCompiled, onBack, onPhotos }: { api:
   }
 
   async function digest() {
-    if (!video || working) return;
+    if (!ready || working) return;
     setError("");
     setNotice("");
     setJob(null);
@@ -170,6 +186,7 @@ export function AuthorImportScreen({ api, onCompiled, onBack, onPhotos }: { api:
     try {
       const started = await api.startDigest(
         video,
+        video ? "" : link.trim(),
         docs,
         author.trim() || "You",
         title.trim(),
@@ -255,6 +272,17 @@ export function AuthorImportScreen({ api, onCompiled, onBack, onPhotos }: { api:
   }
 
   const pct = Math.floor(uploaded * 100);
+  // With a link, only the PDFs (if any) go up from the phone.
+  const sending = !!video || docs.length > 0;
+  const sendingLabel = !video
+    ? docs.length
+      ? uploaded >= 0.999
+        ? "Sent. The backend is checking the manual."
+        : `Sending the link and the manual ${pct}%`
+      : "Sending the link to the backend."
+    : uploaded >= 0.999
+      ? "Upload done. The backend is checking the video."
+      : `Uploading ${pct}%`;
   const primaryLabel = phase === "uploading" ? "Uploading…" : phase === "digesting" ? "Digesting…" : phase === "lost" ? "Check again" : phase === "failed" ? "Try again" : "Digest the video";
 
   return (
@@ -262,7 +290,7 @@ export function AuthorImportScreen({ api, onCompiled, onBack, onPhotos }: { api:
       <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
         <GhostButton label="‹ Back" onPress={onBack} color={colors.muted} style={{ alignSelf: "flex-start", height: 40 }} />
         <Text style={s.kicker}>TEACH A SKILL</Text>
-        <Text style={s.h1}>Upload a video of the job</Text>
+        <Text style={s.h1}>Add a video of the job</Text>
         <Text style={s.lead}>Muse Spark watches it, writes the steps, safety gates and checks, and takes a reference photo and a short clip of you for each step.</Text>
 
         <Text style={s.label}>The video</Text>
@@ -277,8 +305,12 @@ export function AuthorImportScreen({ api, onCompiled, onBack, onPhotos }: { api:
             <Pressable onPress={pickVideo} disabled={working} hitSlop={10} accessibilityRole="button" accessibilityLabel="Choose a different video">
               <Text style={[s.link, working && { opacity: 0.5 }]}>Change</Text>
             </Pressable>
+            <Pressable onPress={removeVideo} disabled={working} hitSlop={10} accessibilityRole="button" accessibilityLabel="Remove the video">
+              <Text style={[s.link, { color: colors.fail }, working && { opacity: 0.5 }]}>Remove</Text>
+            </Pressable>
           </Card>
         ) : (
+          <>
           <Pressable onPress={pickVideo} disabled={working} style={({ pressed }) => [s.drop, pressed && { opacity: 0.85 }]} accessibilityRole="button" accessibilityLabel="Choose the video">
             {phase === "picking" ? (
               <>
@@ -292,6 +324,22 @@ export function AuthorImportScreen({ api, onCompiled, onBack, onPhotos }: { api:
               </>
             )}
           </Pressable>
+          <Text style={s.or}>or paste a YouTube link</Text>
+          <TextInput
+            value={link}
+            onChangeText={setLink}
+            editable={!working}
+            placeholder="https://youtu.be/…"
+            placeholderTextColor={colors.dim}
+            style={s.input}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            returnKeyType="done"
+            accessibilityLabel="YouTube link"
+          />
+          {link.trim() && !linkOk ? <Text style={s.small}>That is not a link to one YouTube video. Copy it from YouTube's Share button.</Text> : null}
+          </>
         )}
 
         <Text style={s.label}>The manual (optional)</Text>
@@ -318,12 +366,12 @@ export function AuthorImportScreen({ api, onCompiled, onBack, onPhotos }: { api:
         <TextInput value={title} onChangeText={setTitle} editable={!working} placeholder="What is this skill? (optional)" placeholderTextColor={colors.dim} style={s.input} />
         <TextInput value={author} onChangeText={setAuthor} editable={!working} placeholder="Your name (optional)" placeholderTextColor={colors.dim} style={s.input} />
 
-        <Text style={s.small}>Use a video you filmed or have permission to use. A narrated video works best, and the manual adds safety steps and specs.</Text>
+        <Text style={s.small}>Use a video you filmed or have permission to use, whether you upload it or link it. A narrated video works best, and the manual adds safety steps and specs.</Text>
       </ScrollView>
 
       <View style={s.footer}>
-        {phase === "uploading" ? <Progress label={uploaded >= 0.999 ? "Upload done. The backend is checking the video." : `Uploading ${pct}%`} value={uploaded} /> : null}
-        {phase === "uploading" && uploaded >= 0.999 ? <Text style={s.small}>Leaving now does not cancel the digest. If the backend accepts the video, the skill is published to the marketplace when it is done.</Text> : null}
+        {phase === "uploading" ? <Progress label={sendingLabel} value={sending ? uploaded : 0} /> : null}
+        {phase === "uploading" && sending && uploaded >= 0.999 ? <Text style={s.small}>Leaving now does not cancel the digest. If the backend accepts the video, the skill is published to the marketplace when it is done.</Text> : null}
         {phase === "digesting" || phase === "lost" ? (
           <>
             <Progress label={job?.message || "Muse Spark is starting."} value={job?.progress ?? 0} />
@@ -331,7 +379,7 @@ export function AuthorImportScreen({ api, onCompiled, onBack, onPhotos }: { api:
           </>
         ) : null}
         {error ? <Text style={s.error}>{error}</Text> : null}
-        <PrimaryButton label={primaryLabel} onPress={phase === "lost" ? checkAgain : digest} disabled={!video || working} />
+        <PrimaryButton label={primaryLabel} onPress={phase === "lost" ? checkAgain : digest} disabled={phase === "lost" ? false : !ready || working} />
         <Pressable onPress={onPhotos} hitSlop={8} style={{ alignSelf: "center" }} accessibilityRole="button">
           <Text style={s.secondary}>Photograph the steps instead</Text>
         </Pressable>
@@ -403,6 +451,7 @@ const s = StyleSheet.create({
   drop: { minHeight: 110, borderRadius: radius.lg, borderWidth: 1.5, borderStyle: "dashed", borderColor: colors.amber, backgroundColor: colors.amberDark, alignItems: "center", justifyContent: "center", gap: 6, padding: 16 },
   dropTitle: { color: colors.amber, fontSize: 17, fontWeight: "700" },
   dropHint: { color: colors.text2, fontSize: 12, textAlign: "center" },
+  or: { color: colors.muted, fontSize: 13, textAlign: "center" },
   fileCard: { flexDirection: "row", alignItems: "center", gap: 12 },
   fileName: { color: colors.text, fontSize: 15, fontWeight: "600", lineHeight: 20 },
   fileMeta: { color: colors.muted, fontSize: 12 },

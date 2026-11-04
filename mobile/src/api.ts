@@ -31,7 +31,15 @@ export type StepSource = "video" | "document" | "both" | "added";
 /** A point where the expert's video and written procedure disagree, and what the skill used. */
 export type Conflict = { topic: string; video_says: string; document_says: string; resolution: string };
 
-export type DigestInfo = { video_seconds: number; chunks: number; documents: string[] };
+export type DigestInfo = {
+  video_seconds: number;
+  chunks: number;
+  documents: string[];
+  // Set when the author pasted a YouTube link instead of uploading the video.
+  video_url?: string | null;
+  video_title?: string | null;
+  video_channel?: string | null;
+};
 
 export type Skill = {
   id: string;
@@ -51,7 +59,7 @@ export type Skill = {
   digest?: DigestInfo | null;
 };
 
-export type DigestStage = "queued" | "preparing" | "uploading" | "reading" | "merging" | "frames" | "saving" | "done" | "failed";
+export type DigestStage = "queued" | "downloading" | "preparing" | "uploading" | "reading" | "merging" | "frames" | "saving" | "done" | "failed";
 
 /** A video digest running on the backend (GET /skills/digest/{id}). `message` is one sentence for
  *  the progress line; `error` is a sentence too, never a status code. */
@@ -436,12 +444,14 @@ export class Api {
     return this.multipart("/skills/compile", form, 300000);
   }
 
-  /** Upload the expert's video (and up to three PDFs of the written procedure) and start a digest.
-   *  The backend checks the files, answers 202 with the job, and keeps working after this returns;
-   *  poll getDigest for progress. `onUploadProgress` gets the fraction of the upload sent (0..1).
-   *  The timeout is long because a video of up to 1 GB may go over a slow Wi-Fi link. */
+  /** Upload the expert's video, or send a YouTube link to it instead (`video` null), with up to three
+   *  PDFs of the written procedure, and start a digest. The backend checks the files, answers 202 with
+   *  the job, and keeps working after this returns (downloading the video first for a link); poll
+   *  getDigest for progress. `onUploadProgress` gets the fraction of the upload sent (0..1). The
+   *  timeout is long because a video of up to 1 GB may go over a slow Wi-Fi link. */
   startDigest(
-    video: PickedFile,
+    video: PickedFile | null,
+    link: string,
     documents: PickedFile[],
     author: string,
     titleHint: string,
@@ -451,11 +461,12 @@ export class Api {
     const form = new FormData();
     form.append("author", author);
     form.append("title_hint", titleHint);
-    form.append("video", { uri: video.uri, name: video.name || "video.mp4", type: videoPartType(video) } as any);
+    if (video) form.append("video", { uri: video.uri, name: video.name || "video.mp4", type: videoPartType(video) } as any);
+    else form.append("video_url", link);
     for (const d of documents) form.append("documents", { uri: d.uri, name: d.name || "procedure.pdf", type: "application/pdf" } as any);
     // When the runtime cannot say how long the body is, the picked files' sizes stand in for it
     // (the form fields and multipart framing are a few hundred bytes).
-    const known = (video.size ?? 0) + documents.reduce((sum, d) => sum + (d.size ?? 0), 0);
+    const known = (video?.size ?? 0) + documents.reduce((sum, d) => sum + (d.size ?? 0), 0);
     const report = onUploadProgress
       ? (sent: number, total: number) => {
           const whole = total > 0 ? total : known;
