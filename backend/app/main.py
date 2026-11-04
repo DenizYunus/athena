@@ -71,7 +71,7 @@ def _failure(exc: Exception) -> tuple[int, str]:
     if isinstance(exc, (openai.APITimeoutError, httpx.TimeoutException, TimeoutError)):
         return 504, "The Meta API took too long to answer. Try again."
     if isinstance(exc, (openai.APIConnectionError, httpx.TransportError)):
-        return 502, "The backend could not reach the Meta API. Check the Mac's internet connection."
+        return 502, "The backend could not reach the Meta API. Check the backend's internet connection."
     if isinstance(exc, openai.BadRequestError):
         return 502, "The Meta API refused this request. Try again with a new photo or clip."
     if isinstance(exc, openai.OpenAIError):
@@ -82,7 +82,7 @@ def _failure(exc: Exception) -> tuple[int, str]:
         return 502, "The answer from the Meta API did not have the expected shape. Try again."
     if isinstance(exc, (RuntimeError, ValueError)):
         return 502, str(exc)[:300]
-    return 500, f"The backend failed: {type(exc).__name__}. The backend terminal has the details."
+    return 500, f"The backend failed: {type(exc).__name__}. The backend log has the details."
 
 
 def _digest_failure(exc: Exception, with_documents: bool) -> str:

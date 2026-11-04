@@ -70,6 +70,8 @@ Push to talk is the default. Tap once: the phone records a video clip and the mi
 
    It prints the URL to enter in the app. The Meta API key can live in `backend/.env` (`MODEL_API_KEY=...`) or be typed into the app's Settings; the app sends it as the `X-Model-API-Key` header and the server uses it for that request.
 
+   For a phone on another network, run `backend/share.sh` instead (`brew install cloudflared` first). It starts the backend behind a Cloudflare quick tunnel and prints an https URL that works from anywhere while the Mac is awake and online, with no account or port forwarding. The URL changes every time it starts. Streamed replies, checks and the live transcript all work through it. A video upload has to finish within a few minutes: 42 MB went through and 95 MB did not, so keep videos short.
+
 2. **Install the APK** from the Releases page on an Android phone (allow installs from unknown sources).
 
 3. **In the app**: Settings → Backend URL → Test connection → Save. Then open a skill (the fridge relay, or the sink P-trap, which any home can try without parts), Install & start, and talk to the guide: tap the big button, show and ask, tap again to send. Your words appear once transcribed, then the reply streams in. Tap ✓ to verify a step from a photo; on a fail or unclear verdict the part is outlined on your photo. "Teach a skill" on the home screen opens the video upload: pick a video, optionally a PDF manual, and tap Digest.
@@ -167,6 +169,9 @@ backend/
   scripts/         smoke scripts against the live API
   tests/           pytest, no network
   run.sh           start on 0.0.0.0 and print the LAN URL
+  share.sh         start behind a Cloudflare quick tunnel and print a public https URL
+  Dockerfile       the backend as one container, with a static ffmpeg 8, for a host that runs images
+  requirements.lock  the exact package versions the tests pass with, used by the image
 mobile/
   App.tsx          screen switch
   src/api.ts       backend client

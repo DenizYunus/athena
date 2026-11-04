@@ -255,7 +255,7 @@ async def _run(args: list[str], timeout: float, what: str) -> bytes:
             *args, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
     except FileNotFoundError as exc:
-        raise RuntimeError(f"The backend cannot {what} because {Path(args[0]).name} is not installed. Install ffmpeg on the Mac.") from exc
+        raise RuntimeError(f"The backend cannot {what} because {Path(args[0]).name} is not installed. Install ffmpeg where the backend runs.") from exc
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout)
     except BaseException as exc:
